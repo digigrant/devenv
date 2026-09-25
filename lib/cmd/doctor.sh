@@ -108,7 +108,9 @@ doctor_host() {
   echo "secrets"
   [ "$(stat -c %a "$HOME/.config/devenv/secrets" 2>/dev/null)" = 700 ] \
     || _wrn "~/.config/devenv/secrets should be mode 700 (install -d -m 700 ~/.config/devenv/secrets)"
-  for f in anthropic github; do
+  [ -e "$HOME/.config/devenv/secrets/anthropic" ] \
+    && _info "~/.config/devenv/secrets/anthropic is not used any more (V1: log in with /login); you can delete it"
+  for f in github; do
     f="$HOME/.config/devenv/secrets/$f"
     if [ ! -f "$f" ]; then _fail "$f is missing"; continue; fi
     mode=$(stat -c %a "$f"); owner=$(stat -c %U "$f")
@@ -127,9 +129,10 @@ doctor_host() {
     [ -n "$t" ] || continue
     case "$t" in "warn: "*) _wrn "${t#warn: }" ;; *) _fail "$t" ;; esac
   done <<<"$gp"
-  if [ -z "$ANTHROPIC_TOKEN_EXPIRES" ]; then _wrn "ANTHROPIC_TOKEN_EXPIRES is not set in devenv.conf (expiry unknown)"
-  elif [ "$(days_until "$ANTHROPIC_TOKEN_EXPIRES" 2>/dev/null || echo -1)" -lt 0 ]; then _fail "anthropic token expired ($ANTHROPIC_TOKEN_EXPIRES)"
-  else _pass "anthropic token valid until $ANTHROPIC_TOKEN_EXPIRES"; fi
+  if [ -n "$ANTHROPIC_TOKEN_EXPIRES" ]; then
+    if [ "$(days_until "$ANTHROPIC_TOKEN_EXPIRES" 2>/dev/null || echo -1)" -lt 0 ]; then _fail "anthropic token expired ($ANTHROPIC_TOKEN_EXPIRES)"
+    else _pass "anthropic token valid until $ANTHROPIC_TOKEN_EXPIRES"; fi
+  fi
 
   echo "devenv checkout ($DEVENV_REAL)"
   local inside=0
@@ -187,11 +190,13 @@ doctor_env() {
   if have claude; then
     out=$(timeout 15 claude auth status 2>&1 || true)
     if printf '%s' "$out" | grep -qiE '"loggedIn": *true|logged in'; then _pass "Claude is logged in"
-    else _wrn "Claude login unclear: $(printf '%s' "$out" | head -n 1)"; fi
+    else _wrn "Claude is not logged in: run /login once in Claude (needed after every rebuild)"; fi
   fi
   if [ "$where" = sbx ]; then
-    [ "${SBX_CRED_ANTHROPIC_MODE:-}" = oauth ] && _pass "SBX_CRED_ANTHROPIC_MODE=oauth" \
-      || _wrn "SBX_CRED_ANTHROPIC_MODE=${SBX_CRED_ANTHROPIC_MODE:-unset} (expected oauth with the setup-token secret; V1)"
+    case "${SBX_CRED_ANTHROPIC_MODE:-none}" in
+      apikey) _wrn "SBX_CRED_ANTHROPIC_MODE=apikey: sbx injects a stored anthropic secret as an API key, which a subscription token can't be (V1). Unless you meant to use a console API key, remove it and recreate" ;;
+      *) _pass "SBX_CRED_ANTHROPIC_MODE=${SBX_CRED_ANTHROPIC_MODE:-none} (Claude subscription via /login)" ;;
+    esac
   fi
 
   echo "herdr and Firstmate"

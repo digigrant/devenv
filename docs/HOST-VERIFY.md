@@ -41,17 +41,13 @@ Expected: the repo files, in `~/devenv`, beside (not inside) `~/dev`.
 
 ```sh
 install -d -m 700 ~/.config/devenv/secrets
-(umask 077; cat > ~/.config/devenv/secrets/anthropic)   # paste the `claude setup-token` token, Enter, Ctrl-D
 (umask 077; cat > ~/.config/devenv/secrets/github)      # paste the gej-machine token, Enter, Ctrl-D
 ls -l ~/.config/devenv/secrets
 ```
 
-Expected: two files, `-rw-------`, owned by you. The github secret must be
-the **gej-machine** token (never your personal one).
-
-If you know when the setup-token expires, put the date (YYYY-MM-DD) in your
-report: the agent will set `ANTHROPIC_TOKEN_EXPIRES` in `devenv.conf` in this
-PR, so the checkout stays clean.
+Expected: the file is `-rw-------` and owned by you. It must be the
+**gej-machine** token (never your personal one). There is no anthropic
+secret: Claude logs in with `/login` (V1, below).
 
 ## 4. Doctor
 
@@ -60,8 +56,8 @@ PR, so the checkout stays clean.
 ```
 
 Expected: every line `ok`, including `github secret authenticates as
-gej-machine (… expires …)`, except warnings for "ANTHROPIC_TOKEN_EXPIRES is not
-set" and "on initial-setup, not main" (while testing the PR branch); on WSL a
+gej-machine (… expires …)`, except a warning for "on initial-setup, not main"
+(while testing the PR branch); on WSL a
 note that the Linux sbx is "best-effort" there; the operating rule at the end.
 If GitHub rejects the github secret (HTTP 401), make a new classic `repo`
 token for gej-machine and write it to the file again. `devenv host-prepare`
@@ -92,7 +88,7 @@ cd ~/devenv && sbx env plan
 Paste the whole plan. It should show: sandbox `dev`; agent/kit `devenv` from
 `./kits/devenv` extending `claude`; workspace `/home/<you>/dev` (read-write);
 additional workspace `/home/<you>/devenv` (read-only); env `DEVENV_ENTRY=herdr`;
-secrets `anthropic` and `github` from commands; a `github` binding for
+the `github` secret from a command; a `github` binding for
 `api.github.com` and `github.com`; skills `readonly`; the `devenv host-prepare`
 lifecycle command.
 
@@ -123,16 +119,23 @@ cd ~/devenv && sbx env rm        # clean up the failed create before retrying
 
 ## 6. Verification items
 
-### V1: subscription token as the `anthropic` secret
+### V1: Claude login
 
-**(in sandbox)**
+**Result of the first host run (2026-09-25): failed.** With the
+`claude setup-token` token as the `anthropic` secret, sbx set
+`SBX_CRED_ANTHROPIC_MODE=apikey` and Claude got HTTP 401. Fallback applied:
+no `anthropic` secret; log in with `/login` once per rebuild.
+
+Check the fallback: in the first-mate pane type `/login` and sign in with the
+Claude subscription. Then **(in sandbox)**:
 ```sh
-echo "$SBX_CRED_ANTHROPIC_MODE"
-claude -p "reply with the single word ok"
+echo "$SBX_CRED_ANTHROPIC_MODE"                 # none
+claude auth status | head -n 3                   # "loggedIn": true
+claude -p "reply with the single word ok"        # ok
 ```
 
-Expected: `oauth`, then `ok`, with no `/login`.
-Fallback if not: drop the `anthropic` secret; you run `/login` once per rebuild.
+After `sbx stop dev` and `sbx env run` (V10), `claude -p` should still work
+without another `/login`; after a recreate (V6) you log in once more.
 
 ### V2: local sandbox kit as the agent; herdr across detach
 
@@ -277,7 +280,7 @@ scope and Firstmate says non-visual work proceeds without it).
 
 | AC | How | Expected |
 |---|---|---|
-| AC1 | steps 5 and V6 | `sbx env run` builds `dev` with no manual steps (plus `/login` only if V1 fell back) |
+| AC1 | steps 5 and V6 | `sbx env run` builds `dev` with no manual steps apart from the one `/login` (V1 fell back) |
 | AC2 | the first-mate pane | Claude banner "Opus 5.5 with xhigh effort", status line `effort:xhigh`, cwd `~/dev/firstmate`; V12 clean |
 | AC3 | V2 step 3 | one `firstmate` workspace after re-running `sbx env run` |
 | AC4 | edit `env.DEVENV_ENTRY` in `~/devenv/sbxenv.yaml` to `claude`, `sbx env run`; then `shell`; then back to `herdr` | plain Claude in `~/dev`; then a bash prompt; no recreate. (Don't commit the edit.) Note: until the Phase 5 cleanup, Claude in `~/dev` uses the old project-level status line |

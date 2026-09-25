@@ -22,17 +22,20 @@ The host-side verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.m
    ```sh
    git clone https://github.com/digigrant/devenv ~/devenv
    ```
-3. Put the secrets in files only you can read:
+3. Put the gej-machine GitHub token in a file only you can read:
    ```sh
    install -d -m 700 ~/.config/devenv/secrets
-   (umask 077; cat > ~/.config/devenv/secrets/anthropic)   # `claude setup-token` token, then Ctrl-D
    (umask 077; cat > ~/.config/devenv/secrets/github)      # the gej-machine token, then Ctrl-D
    ```
 4. Check the host: `~/devenv/bin/devenv doctor`
 5. Build and enter the sandbox: `cd ~/devenv && sbx env run`
 
 You land in herdr, in a workspace named `firstmate`, where the first mate
-(Claude at `xhigh` effort) runs in `~/dev/firstmate`. Detach with `ctrl+b q`;
+(Claude at `xhigh` effort) runs in `~/dev/firstmate`. After each rebuild,
+type `/login` there once and sign in with the Claude subscription; the login
+survives restarts (`sbx stop`), and the sandbox's proxy keeps the tokens on
+the host. (A `claude setup-token` token can't be stored as the sbx
+`anthropic` secret: sbx sends it as an API key, which Anthropic rejects.) Detach with `ctrl+b q`;
 panes keep running. Run `sbx env run` again to re-attach.
 
 `sbx env run` shows a plan and asks for approval (`-y` skips the prompt). With
@@ -110,7 +113,7 @@ Edit it and run `sbx env run` again; no recreate is needed.
 | Command | Where | What |
 |---|---|---|
 | `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, secret files, checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings. |
-| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate ahead of its pin, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES`, Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
+| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate ahead of its pin, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
 | `devenv bump …` | a writable clone | Update `versions.env`: `firstmate`, `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
 | `devenv test` | sandbox or any Docker host | Status line byte-identity, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), and a simulated sbx create that runs the kit's own install and startup steps. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, memory links, warnings. |
@@ -187,9 +190,10 @@ when herdr is bumped past the version it was tested with.
 - **Nothing happens in bash / all commands print nothing inside the sandbox.**
   Something added a shell-completion script to `/etc/sandbox-persistent.sh`.
   Remove it; devenv never does.
-- **Claude asks to `/login` after a rebuild.** The subscription token was not
-  accepted as the `anthropic` secret (V1). Log in once; see
-  docs/HOST-VERIFY.md.
+- **Claude asks to `/login` after a rebuild.** Expected: log in once per
+  rebuild (V1). If `devenv doctor` inside the sandbox says
+  `SBX_CRED_ANTHROPIC_MODE=apikey`, a stored `anthropic` secret is shadowing
+  the login: `sbx secret ls`, remove it, and recreate.
 - **The sandbox opens Claude instead of herdr.** The kit's entrypoint wasn't
   used (V2). Run `devenv entry` by hand, or use the mixin fallback described in
   `kits/devenv/spec.yaml`.

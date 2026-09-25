@@ -34,9 +34,12 @@ env:
 
 # Secret values stay on the host in files only the owner can read (0600).
 # Each is one line to swap for a secrets manager later, e.g. `ref: op://…`.
+#
+# No `anthropic` secret (V1 fallback): sbx stores a `claude setup-token` token
+# as an API key (SBX_CRED_ANTHROPIC_MODE=apikey) and Anthropic rejects it with
+# 401. Log in with /login in Claude once after each rebuild instead; the
+# proxy keeps and refreshes the OAuth tokens on the host.
 secrets:
-  anthropic:
-    command: cat "$HOME/.config/devenv/secrets/anthropic"
   github:
     command: cat "$HOME/.config/devenv/secrets/github"
 

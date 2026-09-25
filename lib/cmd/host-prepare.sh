@@ -23,7 +23,7 @@ stage_payload() {
 cmd_host_prepare() {
   local f mode ws real
   [ "$(detect_mode)" = sbx ] && die "host-prepare runs on the host, not inside a sandbox"
-  for f in anthropic github; do
+  for f in github; do
     f="$HOME/.config/devenv/secrets/$f"
     [ -f "$f" ] || die "missing secret file $f (see README: Secrets)"
     mode=$(stat -c %a "$f")
