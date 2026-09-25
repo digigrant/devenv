@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# devenv-entry: the sandbox entrypoint (the devenv kit's sandbox.entrypoint).
+# Hands over to `devenv entry`. provision.sh installs a copy as
+# /usr/local/bin/devenv-entry with DEVENV_DEFAULT_DIR set to the checkout.
+# If the checkout cannot be found, it starts a login shell rather than
+# leaving the terminal dead.
+DEVENV_DEFAULT_DIR=''
+
+self_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+for d in "${DEVENV_DIR:-}" "$DEVENV_DEFAULT_DIR" "$self_dir/.."; do
+  if [ -n "$d" ] && [ -x "$d/bin/devenv" ]; then
+    exec "$d/bin/devenv" entry "$@"
+  fi
+done
+echo "devenv-entry: cannot find the devenv checkout (DEVENV_DIR=${DEVENV_DIR:-unset}); starting a shell" >&2
+exec bash -l

@@ -1,0 +1,56 @@
+# devenv: the sbx layer. Rebuild with one host command:
+#
+#   cd ~/devenv && sbx env run
+#
+# This file lives in the devenv checkout on the host (~/devenv), a sibling of
+# the workspace (~/dev) and outside every folder the sandbox can write to.
+# Relative paths resolve from this file's directory. Changes to workspaces,
+# kits, secrets and sandboxOptions apply when the sandbox is next created;
+# changes to `env` apply on the next `sbx env run`.
+# Passing no path also merges ~/.sbxenv.yaml if you have one; use
+# `sbx env run .` to skip it.
+schemaVersion: "1"
+name: dev
+
+# The devenv kit forks the built-in claude agent (kind: sandbox, extends:
+# claude). `agent` names the kit; `kits` says where it is. (V2)
+agent: devenv
+kits:
+  - ./kits/devenv
+
+# The workspace: the host's ~/dev, mounted read-write at the same path. (D6)
+workspace: ../dev
+
+# devenv itself, read-only inside the sandbox. provision.sh and `devenv start`
+# run from this mount. (V5, V7)
+additionalWorkspaces:
+  - path: .
+    readOnly: true
+
+env:
+  # What the sandbox opens: herdr (Firstmate) | claude | shell.
+  # Edit and re-run `sbx env run`; no recreate needed.
+  DEVENV_ENTRY: herdr
+
+# Secret values stay on the host in files only the owner can read (0600).
+# Each is one line to swap for a secrets manager later, e.g. `ref: op://…`.
+secrets:
+  anthropic:
+    command: cat "$HOME/.config/devenv/secrets/anthropic"
+  github:
+    command: cat "$HOME/.config/devenv/secrets/github"
+
+sandboxOptions:
+  # sbx's shared skills store, filled by `devenv host-prepare`. Set to `off`
+  # (and DEVENV_SKILLS=link in devenv.conf) if V4 falls back.
+  skills: readonly
+  # memory: 12g            # default: 50% of host memory
+
+lifecycle:
+  initialize:
+    # Runs on the host before every create/run: checks the secret files and
+    # the checkout location, and syncs devenv/skills into the sbx store.
+    - name: devenv host-prepare
+      command: ./bin/devenv host-prepare
+      workdir: ${{ env.fileDir }}
+      timeout: 5m

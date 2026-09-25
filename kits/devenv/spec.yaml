@@ -1,0 +1,69 @@
+# devenv sandbox kit (Kit v2). Forks the built-in `claude` agent: it inherits
+# the claude image, credentials, network rules, volumes and setup, and replaces
+# only the entrypoint. See docs/SPEC.md §2.2 and V2.
+#
+# If `extends: claude` with a replaced entrypoint does not work on your sbx
+# (V2 fails), the documented fallback is to use this directory as a mixin:
+# change `kind` to `mixin`, delete `extends` and the `sandbox` block, add
+# `requires: {agent: claude}`, and in sbxenv.yaml set `agent: claude` with
+# `kits: [./kits/devenv]`. Then start the environment with `devenv entry`
+# by hand.
+schemaVersion: "2"
+kind: sandbox
+name: devenv
+displayName: devenv (Firstmate on herdr, with Claude Code)
+description: >-
+  Claude Code sandbox that runs Firstmate on the herdr backend. Installs the
+  pinned tools with devenv's provision.sh and opens herdr with a first-mate
+  pane (DEVENV_ENTRY=herdr|claude|shell).
+extends: claude
+
+sandbox:
+  # Installed by provision.sh at create time; hands over to `devenv entry`.
+  entrypoint: [devenv-entry]
+
+# Network: the host keeps the `balanced` baseline policy. Extra domains go
+# here, scoped to this sandbox, only once V11 shows the baseline blocks them.
+# Never add herdr.dev.
+# permissions:
+#   network:
+#     allow:
+#       - example.com
+
+setup:
+  install:
+    # Runs as root once, at create, before the terminal attaches. provision.sh
+    # does the system steps as root and the rest as the agent user. It looks
+    # for the devenv checkout in the read-only mount (a sibling of the
+    # workspace), then in the payload host-prepare stages when
+    # DEVENV_STAGE_PAYLOAD=on (V7 fallback).
+    - description: Provision devenv (provision.sh --sbx)
+      user: "0"
+      command: |
+        set -e
+        home=$(getent passwd 1000 | cut -d: -f6)
+        mount="$(dirname "${WORKSPACE_DIR:-/nonexistent}")/devenv"
+        echo "devenv: install sees WORKSPACE_DIR=${WORKSPACE_DIR:-unset}; checkout mount $mount: $(ls "$mount" 2>/dev/null | tr '\n' ' ')"
+        for d in "${DEVENV_DIR:-}" "$mount" "$home/.local/share/devenv-payload"; do
+          if [ -n "$d" ] && [ -x "$d/provision.sh" ]; then
+            echo "devenv: provisioning from $d"
+            exec "$d/provision.sh" --sbx --yes
+          fi
+        done
+        echo "devenv: no devenv checkout found at install time (V7); set DEVENV_STAGE_PAYLOAD=on in devenv.conf and recreate" >&2
+        exit 1
+  startup:
+    # Every start, as the agent user, detached from the session. `devenv start`
+    # re-applies settings (sbx rewrites ~/.claude/settings.json on create),
+    # the herdr config, memory links and the warnings cache. It never fails
+    # the startup dispatcher.
+    - description: devenv start
+      background: true
+      command:
+        - bash
+        - -c
+        - |
+          . /etc/sandbox-persistent.sh 2>/dev/null
+          mkdir -p "$HOME/.cache/devenv"
+          [ -x "${DEVENV_DIR:-}/bin/devenv" ] && "$DEVENV_DIR/bin/devenv" start >>"$HOME/.cache/devenv/start.log" 2>&1
+          exit 0

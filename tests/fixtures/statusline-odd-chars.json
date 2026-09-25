@@ -1,0 +1,18 @@
+{
+  "model": {
+    "id": "x",
+    "display_name": "Model %s \\ %d ✓"
+  },
+  "effort": {
+    "level": "high"
+  },
+  "context_window": {
+    "context_window_size": 200000,
+    "current_usage": {
+      "input_tokens": 1500
+    },
+    "total_input_tokens": 1500,
+    "total_output_tokens": 250,
+    "used_percentage": 0.75
+  }
+}

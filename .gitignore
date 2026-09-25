@@ -1,0 +1,4 @@
+# Build output of `devenv host-prepare` when DEVENV_STAGE_PAYLOAD=on (V7 fallback).
+/kits/devenv/files/home/.local/share/devenv-payload/
+# Rendered sbxenv (V5 fallback, `devenv up`).
+/.sbxenv.rendered.yaml

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# devenv: rebuild and maintain the agent dev environment.
+#
+# In the sandbox (or plain mode):
+#   devenv start               re-apply config at every sandbox start (kit setup.startup)
+#   devenv entry               the sandbox entrypoint; $DEVENV_ENTRY = herdr | claude | shell
+#   devenv check [--quiet]     staleness warnings, cached for the status line
+#   devenv doctor              full health report (also runs on the host)
+#   devenv bump …              update versions.env in a writable checkout (see: devenv bump --help)
+#   devenv test                provision.sh in throwaway containers, status line identity, shellcheck
+# On the host:
+#   devenv doctor              host prerequisites and the operating rules
+#   devenv host-prepare        sbx lifecycle.initialize hook (doctor-lite, skills sync)
+#   devenv skills-sync         put devenv/skills into sbx's shared skills store
+#   devenv up                  V5 fallback: render sbxenv.yaml with absolute paths, then sbx env run
+set -euo pipefail
+
+DEVENV_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+# shellcheck source=../lib/common.sh
+. "$DEVENV_ROOT/lib/common.sh"
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  start|entry|check|doctor|bump|test|host-prepare|skills-sync|up)
+    # shellcheck source=../lib/tools.sh
+    . "$DEVENV_ROOT/lib/tools.sh"
+    # shellcheck source=../lib/claude.sh
+    . "$DEVENV_ROOT/lib/claude.sh"
+    # shellcheck source=../lib/herdr.sh
+    . "$DEVENV_ROOT/lib/herdr.sh"
+    # shellcheck source=../lib/cmd/check.sh
+    . "$DEVENV_ROOT/lib/cmd/check.sh"
+    # shellcheck source=../lib/cmd/start.sh
+    . "$DEVENV_ROOT/lib/cmd/start.sh"
+    # shellcheck source=../lib/cmd/entry.sh
+    . "$DEVENV_ROOT/lib/cmd/entry.sh"
+    # shellcheck source=../lib/cmd/doctor.sh
+    . "$DEVENV_ROOT/lib/cmd/doctor.sh"
+    # shellcheck source=../lib/cmd/bump.sh
+    . "$DEVENV_ROOT/lib/cmd/bump.sh"
+    # shellcheck source=../lib/cmd/test.sh
+    . "$DEVENV_ROOT/lib/cmd/test.sh"
+    # shellcheck source=../lib/cmd/skills-sync.sh
+    . "$DEVENV_ROOT/lib/cmd/skills-sync.sh"
+    # shellcheck source=../lib/cmd/host-prepare.sh
+    . "$DEVENV_ROOT/lib/cmd/host-prepare.sh"
+    # shellcheck source=../lib/cmd/up.sh
+    . "$DEVENV_ROOT/lib/cmd/up.sh"
+    load_config
+    "cmd_${cmd//-/_}" "$@"
+    ;;
+  ''|-h|--help|help) usage ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac
