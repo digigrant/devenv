@@ -38,6 +38,18 @@ check_firstmate_pin() {
   fi
 }
 
+# Normalize a git remote URL for comparison: no trailing slash or .git.
+_repo_url_norm() { local u=${1%/}; printf '%s' "${u%.git}"; }
+
+check_firstmate_origin() {
+  local origin
+  [ -d "$FM_HOME/.git" ] || return
+  origin=$(git -C "$FM_HOME" remote get-url origin 2>/dev/null) || { _check_warn "firstmate clone has no origin remote"; return; }
+  if [ "$(_repo_url_norm "$origin")" != "$(_repo_url_norm "$FIRSTMATE_REPO")" ]; then
+    _check_warn "firstmate origin is $origin, devenv.conf says $FIRSTMATE_REPO — run: git -C \"\$FM_HOME\" remote set-url origin $FIRSTMATE_REPO"
+  fi
+}
+
 check_tool_versions() {
   local t pin cur
   for t in "${DEVENV_BINARIES[@]}"; do
@@ -126,6 +138,7 @@ cmd_check() {
   [ -n "${WORKSPACE:-}" ] || resolve_paths
   _CHECK_WARNINGS=() _CHECK_NOTES=()
   check_firstmate_pin
+  check_firstmate_origin
   check_tool_versions
   check_herdr_manifest
   check_github_token

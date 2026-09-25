@@ -151,7 +151,11 @@ bump_list() {
   latest=$(curl -fsSL -m 20 https://nodejs.org/dist/index.json 2>/dev/null | jq -r '[.[] | select(.lts != false)][0].version // "?"')
   printf '%-22s %-14s %s\n' node "$NODE_VERSION" "${latest#v}"
   latest=$(git ls-remote "$FIRSTMATE_REPO" refs/heads/main 2>/dev/null | cut -c1-12)
-  printf '%-22s %-14s %s\n' firstmate "${FIRSTMATE_COMMIT:0:12}" "${latest:-?}"
+  printf '%-22s %-14s %s  (%s)\n' firstmate "${FIRSTMATE_COMMIT:0:12}" "${latest:-?}" "${FIRSTMATE_REPO#https://github.com/}"
+  if [ -n "${FIRSTMATE_UPSTREAM:-}" ]; then
+    latest=$(git ls-remote "$FIRSTMATE_UPSTREAM" refs/heads/main 2>/dev/null | cut -c1-12)
+    printf '%-22s %-14s %s  (%s; sync the fork on GitHub to pick it up)\n' firstmate-upstream - "${latest:-?}" "${FIRSTMATE_UPSTREAM#https://github.com/}"
+  fi
 }
 
 cmd_bump() {

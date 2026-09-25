@@ -1,7 +1,8 @@
 # devenv
 
 Rebuilds the agent dev environment in one command: a Docker Sandbox (`sbx`)
-named `dev` that runs [Firstmate](https://github.com/kunchenguid/firstmate)
+named `dev` that runs [Firstmate](https://github.com/digigrant/firstmate)
+(the owner's fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate))
 on the [herdr](https://github.com/herdrdev/herdr) backend, with Claude Code as
 the agent. Every tool is pinned and checksum-verified, and the Claude
 settings are reapplied on each start, including the owner's status line,
