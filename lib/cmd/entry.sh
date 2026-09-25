@@ -3,7 +3,9 @@
 #   herdr  (default) herdr with a "firstmate" workspace running the first mate
 #   claude           plain Claude in the workspace
 #   shell            a login shell
-# Any failure before handing over falls back to a login shell.
+# Any failure before handing over falls back to a login shell. Arguments are
+# ignored: through `extends: claude` the kit may pass the parent's always-on
+# claude flags (e.g. --dangerously-skip-permissions) to the entrypoint.
 
 _entry_fallback() {
   local rc=$1

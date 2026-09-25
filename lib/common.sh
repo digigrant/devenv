@@ -125,17 +125,23 @@ resolve_paths() {
 
 # ---------------------------------------------------------------- files
 # Replace FILE with stdin only when the content differs. Prints "changed" or
-# "same". Uses sudo when FILE (or its directory) is not writable.
+# "same". An existing file is overwritten in place, so its owner and mode stay
+# as they are (provision.sh runs as root at sandbox create, and
+# /etc/sandbox-persistent.sh must stay writable by the agent user). A new file
+# gets MODE. Uses sudo when FILE (or its directory) is not writable.
 write_if_changed() {
-  local file=$1 mode=${2:-0644} tmp
+  local file=$1 mode=${2:-0644} tmp dir
   tmp=$(mktemp)
   cat > "$tmp"
   if [ -f "$file" ] && cmp -s "$tmp" "$file"; then
     rm -f "$tmp"; echo same; return 0
   fi
-  local dir=${file%/*}
-  if { [ -e "$file" ] && [ -w "$file" ]; } || { [ ! -e "$file" ] && [ -w "$dir" ]; }; then
-    install -m "$mode" "$tmp" "$file.devenv-new" && mv -f "$file.devenv-new" "$file"
+  dir=${file%/*}
+  if [ -e "$file" ]; then
+    if [ -w "$file" ]; then cat "$tmp" > "$file"
+    else as_root sh -c 'cat "$1" > "$2"' sh "$tmp" "$file"; fi
+  elif [ -w "$dir" ]; then
+    install -m "$mode" "$tmp" "$file"
   else
     as_root install -m "$mode" "$tmp" "$file"
   fi

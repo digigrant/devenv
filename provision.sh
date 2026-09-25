@@ -135,6 +135,13 @@ env_block_content() {
   printf 'export FM_HOME=%q\n' "$FM_HOME"
   printf 'export FM_PROJECTS_OVERRIDE="%s"\n' "$FM_PROJECTS_DIR_RAW"
   printf 'export DEVENV_STATE_DIR=%q\n' "$DEVENV_STATE_DIR"
+  # Keep the npm global prefix the sandbox was provisioned with, so hooks
+  # started with a trimmed environment still find the npm tools.
+  if [ -n "${NPM_CONFIG_PREFIX:-}" ]; then
+    printf 'export NPM_CONFIG_PREFIX=%q\n' "$NPM_CONFIG_PREFIX"
+    # shellcheck disable=SC2016
+    printf 'case ":$PATH:" in *":%s/bin:"*) ;; *) PATH="%s/bin:$PATH" ;; esac\n' "$NPM_CONFIG_PREFIX" "$NPM_CONFIG_PREFIX"
+  fi
   # shellcheck disable=SC2016
   printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
   # shellcheck disable=SC2016

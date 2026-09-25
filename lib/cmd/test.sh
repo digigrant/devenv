@@ -6,6 +6,9 @@
 #   3. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions, a clean second run, and
 #      `devenv check` exiting 0.
+#   4. tests/sbx-sim.sh: the kit's own install and startup snippets in a
+#      container laid out like a Docker Sandbox (root-to-agent handoff,
+#      ownership, a clean re-run). Part of --no-containers.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 
@@ -56,6 +59,9 @@ cmd_test() {
       if bash "$DEVENV_ROOT/tests/container-smoke.sh" "$img"; then results+=("PASS container $img")
       else results+=("FAIL container $img"); rc=1; fi
     done
+    echo "== sbx simulation"
+    if bash "$DEVENV_ROOT/tests/sbx-sim.sh"; then results+=("PASS sbx simulation")
+    else results+=("FAIL sbx simulation"); rc=1; fi
   fi
 
   echo

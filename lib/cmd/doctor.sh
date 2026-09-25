@@ -33,8 +33,14 @@ path_within() {
 
 # Workspaces the host's sandboxes mount, as reported by `sbx ls --json`
 # (best effort: the schema is not documented), plus the one sbxenv.yaml uses.
+# DEVENV_EXTRA_WORKSPACES (colon-separated) adds more, e.g. to test the check.
 host_workspaces() {
+  local extra
   printf '%s\n' "$(dirname "$DEVENV_REAL")/dev" "$HOME/dev"
+  if [ -n "${DEVENV_EXTRA_WORKSPACES:-}" ]; then
+    IFS=: read -r -a extra <<<"$DEVENV_EXTRA_WORKSPACES"
+    printf '%s\n' "${extra[@]}"
+  fi
   if have jq; then
     sbx ls --json 2>/dev/null | jq -r '.. | objects | (.workspace, .workspaces, .workspaceDir, .workspace_dir, .mounts)? // empty
       | if type == "array" then .[] else . end | if type == "object" then (.path // .source // empty) else . end

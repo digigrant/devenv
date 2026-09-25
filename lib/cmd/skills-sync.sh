@@ -19,7 +19,7 @@ sbx_skills_store_dir() {
 
 cmd_skills_sync() {
   local stage s name names=() managed old store method=import
-  have sbx || die "sbx is not installed"
+  have sbx || { warn "sbx is not installed; skills not synced"; return 1; }
   stage=$(mktemp -d)
   mkdir -p "$stage/.claude/skills"
   for s in "$DEVENV_ROOT"/skills/*/; do
