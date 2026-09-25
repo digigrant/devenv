@@ -59,9 +59,13 @@ PR, so the checkout stays clean.
 ~/devenv/bin/devenv doctor
 ```
 
-Expected: every line `ok`, except warnings for "ANTHROPIC_TOKEN_EXPIRES is not
+Expected: every line `ok`, including `github secret authenticates as
+gej-machine (… expires …)`, except warnings for "ANTHROPIC_TOKEN_EXPIRES is not
 set" and "on initial-setup, not main" (while testing the PR branch); on WSL a
 note that the Linux sbx is "best-effort" there; the operating rule at the end.
+If GitHub rejects the github secret (HTTP 401), make a new classic `repo`
+token for gej-machine and write it to the file again. `devenv host-prepare`
+refuses to create the sandbox until it passes.
 
 Also check that doctor refuses unsafe setups (AC13). Each must print a `FAIL`
 line and exit 1:
@@ -88,8 +92,9 @@ cd ~/devenv && sbx env plan
 Paste the whole plan. It should show: sandbox `dev`; agent/kit `devenv` from
 `./kits/devenv` extending `claude`; workspace `/home/<you>/dev` (read-write);
 additional workspace `/home/<you>/devenv` (read-only); env `DEVENV_ENTRY=herdr`;
-secrets `anthropic` and `github` from commands; skills `readonly`; the
-`devenv host-prepare` lifecycle command.
+secrets `anthropic` and `github` from commands; a `github` binding for
+`api.github.com` and `github.com`; skills `readonly`; the `devenv host-prepare`
+lifecycle command.
 
 If the plan rejects `agent: devenv` (V2), try the spec's original form: in
 `sbxenv.yaml` replace the `agent:` and `kits:` lines with
@@ -102,10 +107,17 @@ sbx kit inspect ./kits/devenv      # if this subcommand exists: shows the resolv
 cd ~/devenv && sbx env run
 ```
 
-Save the whole create output (it includes `devenv: install sees …` and
-`devenv: provisioning from …` lines from the kit's install step). You should
-land in herdr, in a workspace named **firstmate**, with Claude starting in
-`~/dev/firstmate`.
+Save the whole create output. You should land in herdr, in a workspace named
+**firstmate**, with Claude starting in `~/dev/firstmate`.
+
+If it fails with `failed to apply kit to sandbox`, sbx doesn't print the
+kit's install output, but the daemon log has it (tokens masked):
+
+```sh
+grep -h 'create sandbox failed' ~/.local/state/sandboxes/sandboxes/sandboxd/daemon.log | tail -n 1 \
+  | sed -E 's/\\n/\n/g; s/(sk-ant-[a-z0-9]+-)[A-Za-z0-9_-]+/\1<redacted>/g; s/(gh[opsu]_)[A-Za-z0-9]+/\1<redacted>/g'
+cd ~/devenv && sbx env rm        # clean up the failed create before retrying
+```
 
 ---
 
@@ -207,7 +219,8 @@ answer lighthouse. Fallback: a `lifecycle.preRemove` hook.
 
 ### V7: devenv mount during `setup.install`
 
-From the create output saved in step 5:
+**Passed** on the first host run (2026-09-25): the install step saw the
+checkout. From the daemon log (or the create output):
 ```text
 devenv: install sees WORKSPACE_DIR=/home/<you>/dev; checkout mount /home/<you>/devenv: README.md bin ...
 devenv: provisioning from /home/<you>/devenv

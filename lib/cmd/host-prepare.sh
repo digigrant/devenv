@@ -39,6 +39,11 @@ cmd_host_prepare() {
       die "the devenv checkout ($real) overlaps a sandbox workspace ($ws); keep it outside, e.g. ~/devenv"
     fi
   done < <(host_workspaces | sort -u)
+  local t
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    case "$t" in "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
+  done <<<"$(github_secret_problems)"
   ok "secrets and checkout location look right"
   if [ "$DEVENV_SKILLS" = store ]; then
     cmd_skills_sync || warn "skills were not synced into the sbx store; see docs/HOST-VERIFY.md (V4) for the fallback"

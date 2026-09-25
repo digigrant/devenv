@@ -40,6 +40,17 @@ secrets:
   github:
     command: cat "$HOME/.config/devenv/secrets/github"
 
+# Approves the proxy injecting the github secret (gej-machine) for this
+# third-party kit: gh and the REST API, and git over HTTPS. The anthropic
+# binding is approved interactively on the first run (the kit inherits that
+# credential from claude). Written into ~/.config/sbx/credentials.yaml.
+bindings:
+  github:
+    apiKey:
+      domains:
+        - api.github.com
+        - github.com
+
 sandboxOptions:
   # sbx's shared skills store, filled by `devenv host-prepare`. Set to `off`
   # (and DEVENV_SKILLS=link in devenv.conf) if V4 falls back.

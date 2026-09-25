@@ -195,7 +195,12 @@ step_firstmate() {
   if [ ! -e "$FM_HOME" ] || { [ -d "$FM_HOME" ] && [ -z "$(ls -A "$FM_HOME")" ]; }; then
     log "cloning Firstmate into $FM_HOME at ${FIRSTMATE_COMMIT:0:12}"
     mkdir -p "$(dirname "$FM_HOME")"
-    git clone --quiet "$FIRSTMATE_REPO" "$FM_HOME"
+    if ! GIT_TERMINAL_PROMPT=0 git clone --quiet "$FIRSTMATE_REPO" "$FM_HOME"; then
+      # Keep going: a failed clone should not tear down the whole sandbox.
+      # `devenv check` and `devenv entry` report the missing home.
+      warn "could not clone Firstmate from $FIRSTMATE_REPO (GitHub access?). Fix it, then re-run: $DEVENV_ROOT/provision.sh"
+      return 0
+    fi
     git -C "$FM_HOME" checkout --quiet -B main "$FIRSTMATE_COMMIT"
     git -C "$FM_HOME" branch --quiet --set-upstream-to=origin/main main
     ok "Firstmate cloned at ${FIRSTMATE_COMMIT:0:12}"
@@ -226,7 +231,7 @@ step_repos() {
     dest="$WORKSPACE/$dir"
     if [ -e "$dest" ]; then continue; fi
     log "cloning $url into $dest"
-    git clone --quiet "$url" "$dest"
+    GIT_TERMINAL_PROMPT=0 git clone --quiet "$url" "$dest" || warn "could not clone $url; re-run provision.sh later"
   done < "$DEVENV_ROOT/repos.txt"
 }
 
