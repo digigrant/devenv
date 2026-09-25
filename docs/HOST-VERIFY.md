@@ -41,13 +41,16 @@ Expected: the repo files, in `~/devenv`, beside (not inside) `~/dev`.
 
 ```sh
 install -d -m 700 ~/.config/devenv/secrets
+(umask 077; cat > ~/.config/devenv/secrets/anthropic)   # paste the `claude setup-token` token, Enter, Ctrl-D
 (umask 077; cat > ~/.config/devenv/secrets/github)      # paste the gej-machine token, Enter, Ctrl-D
 ls -l ~/.config/devenv/secrets
 ```
 
-Expected: the file is `-rw-------` and owned by you. It must be the
-**gej-machine** token (never your personal one). There is no anthropic
-secret: Claude logs in with `/login` (V1, below).
+Expected: two files, `-rw-------`, owned by you. The github secret must be the
+**gej-machine** token (never your personal one). The anthropic file holds the
+setup-token (`sk-ant-oat01-…`); `devenv host-prepare` turns it into a custom
+secret (see V1). If you know when the setup-token expires, put the date in
+your report and the agent will set `ANTHROPIC_TOKEN_EXPIRES`.
 
 ## 4. Doctor
 
@@ -55,9 +58,10 @@ secret: Claude logs in with `/login` (V1, below).
 ~/devenv/bin/devenv doctor
 ```
 
-Expected: every line `ok`, including `github secret authenticates as
-gej-machine (… expires …)`, except a warning for "on initial-setup, not main"
-(while testing the PR branch); on WSL a
+Expected: every line `ok`, including `…/secrets/anthropic (0600, a
+setup-token)` and `github secret authenticates as gej-machine (… expires …)`,
+except warnings for "ANTHROPIC_TOKEN_EXPIRES is not set" and "on
+initial-setup, not main" (while testing the PR branch); on WSL a
 note that the Linux sbx is "best-effort" there; the operating rule at the end.
 If GitHub rejects the github secret (HTTP 401), make a new classic `repo`
 token for gej-machine and write it to the file again. `devenv host-prepare`
@@ -88,7 +92,7 @@ cd ~/devenv && sbx env plan
 Paste the whole plan. It should show: sandbox `dev`; agent/kit `devenv` from
 `./kits/devenv` extending `claude`; workspace `/home/<you>/dev` (read-write);
 additional workspace `/home/<you>/devenv` (read-only); env `DEVENV_ENTRY=herdr`;
-the `github` secret from a command; a `github` binding for
+the `github` secret from a command (no `anthropic` secret); a `github` binding for
 `api.github.com` and `github.com`; skills `readonly`; the `devenv host-prepare`
 lifecycle command.
 
@@ -103,8 +107,10 @@ sbx kit inspect ./kits/devenv      # if this subcommand exists: shows the resolv
 cd ~/devenv && sbx env run
 ```
 
-Save the whole create output. You should land in herdr, in a workspace named
-**firstmate**, with Claude starting in `~/dev/firstmate`.
+Save the whole create output. The `devenv host-prepare` part should end with
+`Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
+(placeholder)`. You should land in herdr, in a workspace named **firstmate**,
+with Claude starting in `~/dev/firstmate`, already signed in.
 
 If it fails with `failed to apply kit to sandbox`, sbx doesn't print the
 kit's install output, but the daemon log has it (tokens masked):
@@ -121,21 +127,24 @@ cd ~/devenv && sbx env rm        # clean up the failed create before retrying
 
 ### V1: Claude login
 
-**Result of the first host run (2026-09-25): failed.** With the
-`claude setup-token` token as the `anthropic` secret, sbx set
-`SBX_CRED_ANTHROPIC_MODE=apikey` and Claude got HTTP 401. Fallback applied:
-no `anthropic` secret; log in with `/login` once per rebuild.
+**History (2026-09-25).** The spec's design, the setup-token as the sbx
+`anthropic` secret, failed: sbx set `SBX_CRED_ANTHROPIC_MODE=apikey` and
+Claude got HTTP 401. The token as a **custom secret** (`CLAUDE_CODE_OAUTH_TOKEN`
+placeholder, swapped for `api.anthropic.com`) passed in a throwaway sandbox:
+`authMethod: oauth_token`, `claude -p` answered, and `quota-axi` read the
+subscription's windows. devenv now does that (`CLAUDE_AUTH=token`).
 
-Check the fallback: in the first-mate pane type `/login` and sign in with the
-Claude subscription. Then **(in sandbox)**:
+Check it in `dev` **(in sandbox)**:
 ```sh
-echo "$SBX_CRED_ANTHROPIC_MODE"                 # none
-claude auth status | head -n 3                   # "loggedIn": true
-claude -p "reply with the single word ok"        # ok
+echo "mode=$SBX_CRED_ANTHROPIC_MODE var=${CLAUDE_CODE_OAUTH_TOKEN:0:7}"   # mode=none var=sbx-cs-
+claude auth status | head -n 4                    # "loggedIn": true, "authMethod": "oauth_token"
+claude -p "reply with the single word ok" < /dev/null   # ok
+devenv doctor | sed -n '/^accounts/,/^herdr/p'    # all ok
 ```
 
-After `sbx stop dev` and `sbx env run` (V10), `claude -p` should still work
-without another `/login`; after a recreate (V6) you log in once more.
+Also after `sbx stop dev` + `sbx env run` (V10) and after a recreate (V6):
+still signed in, no `/login`. Fallback: `CLAUDE_AUTH=login` in `devenv.conf`
+and `/login` once per rebuild.
 
 ### V2: local sandbox kit as the agent; herdr across detach
 
@@ -280,7 +289,7 @@ scope and Firstmate says non-visual work proceeds without it).
 
 | AC | How | Expected |
 |---|---|---|
-| AC1 | steps 5 and V6 | `sbx env run` builds `dev` with no manual steps apart from the one `/login` (V1 fell back) |
+| AC1 | steps 5 and V6 | `sbx env run` builds `dev` with no manual steps (Claude signs in with the setup-token) |
 | AC2 | the first-mate pane | Claude banner "Opus 5.5 with xhigh effort", status line `effort:xhigh`, cwd `~/dev/firstmate`; V12 clean |
 | AC3 | V2 step 3 | one `firstmate` workspace after re-running `sbx env run` |
 | AC4 | edit `env.DEVENV_ENTRY` in `~/devenv/sbxenv.yaml` to `claude`, `sbx env run`; then `shell`; then back to `herdr` | plain Claude in `~/dev`; then a bash prompt; no recreate. (Don't commit the edit.) Note: until the Phase 5 cleanup, Claude in `~/dev` uses the old project-level status line |

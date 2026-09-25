@@ -22,20 +22,20 @@ The host-side verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.m
    ```sh
    git clone https://github.com/digigrant/devenv ~/devenv
    ```
-3. Put the gej-machine GitHub token in a file only you can read:
+3. Put the secrets in files only you can read:
    ```sh
    install -d -m 700 ~/.config/devenv/secrets
+   (umask 077; cat > ~/.config/devenv/secrets/anthropic)   # `claude setup-token` token (sk-ant-oat01-…), then Ctrl-D
    (umask 077; cat > ~/.config/devenv/secrets/github)      # the gej-machine token, then Ctrl-D
    ```
+   Put the setup-token's expiry date in `ANTHROPIC_TOKEN_EXPIRES` in
+   `devenv.conf` (by PR), so `devenv check` can warn before it runs out.
 4. Check the host: `~/devenv/bin/devenv doctor`
 5. Build and enter the sandbox: `cd ~/devenv && sbx env run`
 
 You land in herdr, in a workspace named `firstmate`, where the first mate
-(Claude at `xhigh` effort) runs in `~/dev/firstmate`. After each rebuild,
-type `/login` there once and sign in with the Claude subscription; the login
-survives restarts (`sbx stop`), and the sandbox's proxy keeps the tokens on
-the host. (A `claude setup-token` token can't be stored as the sbx
-`anthropic` secret: sbx sends it as an API key, which Anthropic rejects.) Detach with `ctrl+b q`;
+(Claude at `xhigh` effort) runs in `~/dev/firstmate`. No `/login` is needed:
+see [Claude sign-in](#claude-sign-in). Detach with `ctrl+b q`;
 panes keep running. Run `sbx env run` again to re-attach.
 
 `sbx env run` shows a plan and asks for approval (`-y` skips the prompt). With
@@ -81,6 +81,31 @@ and native Linux behave the same.
   checks are off.
 - Merges follow Firstmate's rule: never without the owner's explicit word.
   `yolo` stays off.
+
+## Claude sign-in
+
+With `CLAUDE_AUTH=token` (the default, in `devenv.conf`), Claude, the first
+mate and every worker run on your Claude subscription through the long-lived
+`claude setup-token` token:
+
+- `devenv host-prepare` stores it in sbx as a **custom secret** for sandbox
+  `dev` (`sbxenv.yaml` can't declare custom secrets). Inside the sandbox
+  `CLAUDE_CODE_OAUTH_TOKEN` holds only a placeholder; the proxy swaps in the
+  real token on requests to `api.anthropic.com`. The placeholder is random and
+  kept on the host in `~/.config/devenv/claude-oauth-placeholder`.
+- Firstmate needs no changes: workers inherit the variable, and `quota-axi`
+  reads your subscription's usage windows with it.
+- The token is inference-only by design: claude.ai connectors, Remote Control,
+  Claude in Chrome and plugin sync don't work with it. Nothing in devenv or
+  Firstmate uses them.
+- Don't store the token with `sbx secret set anthropic` (or in `sbxenv.yaml`
+  `secrets:`): sbx then treats it as a Console API key
+  (`SBX_CRED_ANTHROPIC_MODE=apikey`), which outranks the subscription and is
+  rejected with HTTP 401.
+
+`CLAUDE_AUTH=login` instead uses no Claude secret: run `/login` once after
+each rebuild (a full-scope login that survives `sbx stop`). Switching modes
+takes a recreate.
 
 ## Choosing what the sandbox opens
 
@@ -190,10 +215,13 @@ when herdr is bumped past the version it was tested with.
 - **Nothing happens in bash / all commands print nothing inside the sandbox.**
   Something added a shell-completion script to `/etc/sandbox-persistent.sh`.
   Remove it; devenv never does.
-- **Claude asks to `/login` after a rebuild.** Expected: log in once per
-  rebuild (V1). If `devenv doctor` inside the sandbox says
-  `SBX_CRED_ANTHROPIC_MODE=apikey`, a stored `anthropic` secret is shadowing
-  the login: `sbx secret ls`, remove it, and recreate.
+- **Claude asks to `/login` or gets HTTP 401.** Run `devenv doctor` inside the
+  sandbox. `CLAUDE_CODE_OAUTH_TOKEN is not set` means the custom secret didn't
+  reach it: check the `devenv host-prepare` output of `sbx env run`, then
+  recreate. `SBX_CRED_ANTHROPIC_MODE=apikey` means a stored `anthropic`
+  secret outranks the token: remove it (`sbx secret ls`) and recreate. A
+  401 with the variable set means the setup-token expired or was revoked: make
+  a new one with `claude setup-token` on the host.
 - **The sandbox opens Claude instead of herdr.** The kit's entrypoint wasn't
   used (V2). Run `devenv entry` by hand, or use the mixin fallback described in
   `kits/devenv/spec.yaml`.

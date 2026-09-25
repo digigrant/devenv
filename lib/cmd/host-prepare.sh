@@ -10,6 +10,46 @@
 # Uses path_within/host_workspaces (doctor.sh) and cmd_skills_sync
 # (skills-sync.sh); bin/devenv sources both.
 
+# The Claude setup-token as an sbx custom secret for this sandbox (V1).
+# The placeholder is random, created once, and kept on the host (never in the
+# repo, which agents can read), so re-running set-custom ("create or update")
+# changes nothing for a sandbox that already carries it.
+claude_token_placeholder() {
+  local f=$HOME/.config/devenv/claude-oauth-placeholder
+  if [ ! -s "$f" ]; then
+    mkdir -p "${f%/*}"
+    (umask 077; printf 'sbx-cs-devenv-%s\n' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" > "$f")
+  fi
+  tr -d '\r\n' < "$f"
+}
+
+sync_claude_auth() {
+  local tok=$HOME/.config/devenv/secrets/anthropic phf=$HOME/.config/devenv/claude-oauth-placeholder ph out
+  case "$CLAUDE_AUTH" in
+    token)
+      [ -f "$tok" ] || die "missing $tok: put the \`claude setup-token\` token there (see README), or set CLAUDE_AUTH=login"
+      [ "$(stat -c %a "$tok")" = 600 ] || die "$tok is mode $(stat -c %a "$tok"); run: chmod 600 $tok"
+      [ "$(stat -c %U "$tok")" = "$(id -un)" ] || die "$tok is not owned by $(id -un)"
+      local tp
+      if tp=$(claude_token_file_problem "$tok"); then die "$tp"; fi
+      ph=$(claude_token_placeholder)
+      if ! out=$(sbx secret set-custom --sandbox "$CONF_SANDBOX_NAME" --host api.anthropic.com \
+                 --env CLAUDE_CODE_OAUTH_TOKEN --placeholder "$ph" --command "cat $(printf '%q' "$tok")" 2>&1 </dev/null); then
+        die "sbx secret set-custom failed: $(printf '%s' "$out" | tail -n 1)"
+      fi
+      ok "Claude setup-token available to sandbox $CONF_SANDBOX_NAME as CLAUDE_CODE_OAUTH_TOKEN (placeholder)"
+      ;;
+    login)
+      if [ -s "$phf" ]; then
+        sbx secret rm --placeholder "$(tr -d '\r\n' < "$phf")" -f >/dev/null 2>&1 </dev/null || true
+        rm -f "$phf"
+        log "removed the Claude setup-token custom secret (CLAUDE_AUTH=login)"
+      fi
+      ;;
+    *) die "CLAUDE_AUTH in devenv.conf must be token or login, not '$CLAUDE_AUTH'" ;;
+  esac
+}
+
 stage_payload() {
   local dest="$DEVENV_ROOT/kits/devenv/files/home/.local/share/devenv-payload"
   rm -rf "$dest.new"
@@ -45,6 +85,7 @@ cmd_host_prepare() {
     case "$t" in "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
   done <<<"$(github_secret_problems)"
   ok "secrets and checkout location look right"
+  sync_claude_auth
   if [ "$DEVENV_SKILLS" = store ]; then
     cmd_skills_sync || warn "skills were not synced into the sbx store; see docs/HOST-VERIFY.md (V4) for the fallback"
   fi

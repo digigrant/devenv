@@ -95,8 +95,11 @@ check_github_token() {
 
 check_anthropic_token() {
   local days
-  # Only used with an expiring anthropic credential; /login needs none.
-  [ -n "$ANTHROPIC_TOKEN_EXPIRES" ] || return 0
+  if [ -z "$ANTHROPIC_TOKEN_EXPIRES" ]; then
+    # /login refreshes itself; only the setup-token has a fixed expiry.
+    [ "$CLAUDE_AUTH" = token ] && _check_note "anthropic setup-token expiry unknown (set ANTHROPIC_TOKEN_EXPIRES in devenv.conf)"
+    return 0
+  fi
   days=$(days_until "$ANTHROPIC_TOKEN_EXPIRES") || { _check_warn "ANTHROPIC_TOKEN_EXPIRES is not a date: $ANTHROPIC_TOKEN_EXPIRES"; return; }
   if [ "$days" -lt 0 ]; then _check_warn "anthropic token expired ($ANTHROPIC_TOKEN_EXPIRES)"
   elif [ "$days" -lt "$WARN_DAYS" ]; then _check_warn "anthropic token expires in $days days ($ANTHROPIC_TOKEN_EXPIRES)"

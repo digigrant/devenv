@@ -63,6 +63,21 @@ github_secret_whoami() {
   printf '%s\t%s\t%s\n' "${code:-000}" "${login:--}" "${exp:--}"
 }
 
+# Prints why a Claude setup-token file is unusable and returns 0, or prints
+# nothing and returns 1 when it looks right. Never prints the token.
+claude_token_file_problem() {
+  local f=$1
+  if [ ! -s "$f" ]; then echo "$f is empty"; return 0; fi
+  if [ "$(wc -l < "$f")" -gt 1 ] || tr -d '\n' < "$f" | grep -q '[[:space:]]'; then
+    echo "$f must hold just the token on one line (it has extra lines, spaces or CR characters)"; return 0
+  fi
+  case "$(head -c 14 "$f")" in
+    sk-ant-oat01-*) return 1 ;;
+    sk-ant-api*) echo "$f holds a Console API key, not a \`claude setup-token\` token (sk-ant-oat01-…)"; return 0 ;;
+    *) echo "$f does not look like a \`claude setup-token\` token (sk-ant-oat01-…)"; return 0 ;;
+  esac
+}
+
 # Problems with the github secret file's content or account, one per line.
 # Network trouble is reported with a "warn: " prefix instead.
 github_secret_problems() {
@@ -108,8 +123,17 @@ doctor_host() {
   echo "secrets"
   [ "$(stat -c %a "$HOME/.config/devenv/secrets" 2>/dev/null)" = 700 ] \
     || _wrn "~/.config/devenv/secrets should be mode 700 (install -d -m 700 ~/.config/devenv/secrets)"
-  [ -e "$HOME/.config/devenv/secrets/anthropic" ] \
-    && _info "~/.config/devenv/secrets/anthropic is not used any more (V1: log in with /login); you can delete it"
+  local tokf=$HOME/.config/devenv/secrets/anthropic tp
+  case "$CLAUDE_AUTH" in
+    token)
+      if [ ! -f "$tokf" ]; then _fail "$tokf is missing (CLAUDE_AUTH=token needs the \`claude setup-token\` token)"
+      elif [ "$(stat -c %a "$tokf")" != 600 ]; then _fail "$tokf is mode $(stat -c %a "$tokf"); run: chmod 600 $tokf"
+      elif tp=$(claude_token_file_problem "$tokf"); then _fail "$tp"
+      else _pass "$tokf (0600, a setup-token)"; fi
+      ;;
+    login) [ -e "$tokf" ] && _info "$tokf is not used with CLAUDE_AUTH=login; you can delete it" ;;
+    *) _fail "CLAUDE_AUTH in devenv.conf must be token or login" ;;
+  esac
   for f in github; do
     f="$HOME/.config/devenv/secrets/$f"
     if [ ! -f "$f" ]; then _fail "$f is missing"; continue; fi
@@ -132,6 +156,8 @@ doctor_host() {
   if [ -n "$ANTHROPIC_TOKEN_EXPIRES" ]; then
     if [ "$(days_until "$ANTHROPIC_TOKEN_EXPIRES" 2>/dev/null || echo -1)" -lt 0 ]; then _fail "anthropic token expired ($ANTHROPIC_TOKEN_EXPIRES)"
     else _pass "anthropic token valid until $ANTHROPIC_TOKEN_EXPIRES"; fi
+  elif [ "$CLAUDE_AUTH" = token ]; then
+    _wrn "ANTHROPIC_TOKEN_EXPIRES is not set in devenv.conf (setup-token expiry unknown)"
   fi
 
   echo "devenv checkout ($DEVENV_REAL)"
@@ -189,14 +215,30 @@ doctor_env() {
   else _fail "gh auth status fails (Firstmate bootstrap prints NEEDS_GH_AUTH)"; fi
   if have claude; then
     out=$(timeout 15 claude auth status 2>&1 || true)
-    if printf '%s' "$out" | grep -qiE '"loggedIn": *true|logged in'; then _pass "Claude is logged in"
+    local method
+    method=$(printf '%s' "$out" | sed -n 's/.*"authMethod": *"\([^"]*\)".*/\1/p' | head -n 1)
+    if printf '%s' "$out" | grep -qiE '"loggedIn": *true|logged in'; then
+      if [ "$CLAUDE_AUTH" = token ] && [ "$method" != oauth_token ]; then
+        _wrn "Claude is logged in via ${method:-unknown}, not the setup-token (oauth_token)"
+      else
+        _pass "Claude is logged in (${method:-unknown})"
+      fi
+    elif [ "$CLAUDE_AUTH" = token ]; then _fail "Claude is not logged in with the setup-token (CLAUDE_CODE_OAUTH_TOKEN)"
     else _wrn "Claude is not logged in: run /login once in Claude (needed after every rebuild)"; fi
   fi
   if [ "$where" = sbx ]; then
     case "${SBX_CRED_ANTHROPIC_MODE:-none}" in
-      apikey) _wrn "SBX_CRED_ANTHROPIC_MODE=apikey: sbx injects a stored anthropic secret as an API key, which a subscription token can't be (V1). Unless you meant to use a console API key, remove it and recreate" ;;
-      *) _pass "SBX_CRED_ANTHROPIC_MODE=${SBX_CRED_ANTHROPIC_MODE:-none} (Claude subscription via /login)" ;;
+      apikey) _wrn "SBX_CRED_ANTHROPIC_MODE=apikey: a stored anthropic secret is injected as an API key and outranks the subscription (V1). Unless you meant to use a Console API key, remove it (sbx secret ls) and recreate" ;;
+      *) _pass "SBX_CRED_ANTHROPIC_MODE=${SBX_CRED_ANTHROPIC_MODE:-none}" ;;
     esac
+    if [ "$CLAUDE_AUTH" = token ]; then
+      case "${CLAUDE_CODE_OAUTH_TOKEN:-}" in
+        '') _fail "CLAUDE_CODE_OAUTH_TOKEN is not set: the custom secret didn't reach this sandbox (recreate it after devenv host-prepare)" ;;
+        sk-ant-*) _fail "CLAUDE_CODE_OAUTH_TOKEN holds a real token inside the sandbox; it should be the sbx placeholder" ;;
+        sbx-cs-*) _pass "CLAUDE_CODE_OAUTH_TOKEN is the sbx placeholder (the real token stays on the host)" ;;
+        *) _wrn "CLAUDE_CODE_OAUTH_TOKEN is set but does not look like an sbx placeholder" ;;
+      esac
+    fi
   fi
 
   echo "herdr and Firstmate"
