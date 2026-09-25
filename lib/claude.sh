@@ -12,12 +12,12 @@ STATUSLINE_SHA256=dc324500a5e54bc7905816cd92039c6519e4bcd3303d40a023e0686cde7e27
 # overlay hook replaces the old one instead of piling up next to it.
 # shellcheck disable=SC2016
 CLAUDE_MERGE_JQ='
-def merge(a; b):
-  if (a | type) == "object" and (b | type) == "object" then
-    reduce (b | keys_unsorted[]) as $k (a; .[$k] = merge(a[$k]; b[$k]))
-  elif (a | type) == "array" and (b | type) == "array" then
-    a + [b[] | . as $x | select(any(a[]; . == $x) | not)]
-  else b end;
+def merge($a; $b):
+  if ($a | type) == "object" and ($b | type) == "object" then
+    reduce ($b | keys_unsorted[]) as $k ($a; .[$k] = merge($a[$k]; $b[$k]))
+  elif ($a | type) == "array" and ($b | type) == "array" then
+    $a + [$b[] | . as $x | select(any($a[]; . == $x) | not)]
+  else $b end;
 def is_devenv_hook: any(.hooks[]?; (.command // "") | tostring | contains("/.claude/hooks/devenv-"));
 (if (.hooks | type) == "object" then
    .hooks |= with_entries(.value |= (if type == "array" then map(select(is_devenv_hook | not)) else . end))
