@@ -99,6 +99,7 @@ as_tester 'test -d ~/dev/firstmate/.git' && pass "Firstmate cloned into ~/dev/fi
 [ "$(as_tester 'git -C ~/dev/firstmate remote get-url origin')" = "$FIRSTMATE_REPO" ] && pass "Firstmate cloned from $FIRSTMATE_REPO" || bad "Firstmate origin"
 [ "$(as_tester 'git -C ~/dev/firstmate rev-parse HEAD')" = "$(as_tester 'git -C ~/dev/firstmate rev-parse origin/main')" ] && pass "Firstmate at the fork's main" || bad "Firstmate not at the fork's main"
 [ "$(as_tester 'tr -d "[:space:]" < ~/dev/firstmate/config/backend')" = herdr ] && pass "Firstmate backend herdr" || bad "Firstmate backend"
+[ "$(as_tester 'cat ~/dev/firstmate/data/projects.md')" = "$(cat /devenv/firstmate/data/projects.md)" ] && pass "Firstmate data/projects.md seeded" || bad "Firstmate data/projects.md"
 [ -z "$(as_tester 'git config --global user.name || true')" ] && pass "git identity untouched (--git-identity skip)" || bad "git identity was set"
 
 if as_tester "$env_sh; devenv check" > /tmp/check.log 2>&1; then pass "devenv check exits 0"; else bad "devenv check exit code"; fi

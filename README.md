@@ -289,6 +289,7 @@ bin/                   devenv CLI and the entrypoint shim
 lib/                   shared shell code; lib/cmd/ has one file per subcommand
 agents/claude/         everything Claude-specific (status line, overlay, CLAUDE.md, hooks)
 firstmate/config/      starting copy of Firstmate's config
+firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
 tests/                 container smoke test, sbx simulation, status line identity test, fixtures
