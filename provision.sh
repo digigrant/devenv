@@ -135,6 +135,9 @@ env_block_content() {
   printf 'export FM_HOME=%q\n' "$FM_HOME"
   printf 'export FM_PROJECTS_OVERRIDE="%s"\n' "$FM_PROJECTS_DIR_RAW"
   printf 'export DEVENV_STATE_DIR=%q\n' "$DEVENV_STATE_DIR"
+  # Keep no-mistakes from sending telemetry to its vendor; its daemon reads
+  # this when it starts.
+  printf '%s\n' 'export NO_MISTAKES_TELEMETRY=off'
   # Keep the npm global prefix the sandbox was provisioned with, so hooks
   # started with a trimmed environment still find the npm tools.
   if [ -n "${NPM_CONFIG_PREFIX:-}" ]; then
