@@ -87,6 +87,7 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Fallbacks removed | V5 `devenv up`, V7 `DEVENV_STAGE_PAYLOAD` | gone | Obsolete with the new layout. |
 | Agents off `main` | owner sets branch rules by hand (D9) | `digigrant/devenv` has an active ruleset (PR with one approval, no force-push or deletion). Not enforced for the fork `digigrant/firstmate`: its ruleset stays disabled so the in-sandbox sync (as gej-machine) works | Owner, session 2: the owner has no `gh` login on the host and doesn't want one; not worth it for the fork. |
 | Setup-token expiry | owner fills in `ANTHROPIC_TOKEN_EXPIRES` | left empty | Owner, session 2: tokens will move to a secrets manager soon. |
+| Firstmate's own registration of devenv | entered by hand in each running instance's `data/projects.md` | seeded automatically: `firstmate/data/projects.md` in this repo, copied into `$FM_HOME/data/` by `provision.sh` step 8 whenever the destination file is absent, same contract as the existing `firstmate/config/` seeding | Without this, a fresh sandbox or a wiped Firstmate home came up with devenv unregistered again, requiring the same manual step every time. |
 
 ## Verification status
 
@@ -123,9 +124,12 @@ and push them to PR #1. Things only the host can show:
 
 ### 2. Firstmate projects
 
-Nothing to build. The owner tells the first mate about each project once (name,
-URL, delivery mode; devenv: direct-PR). Firstmate's home survives rebuilds;
-project clones don't, and it re-clones when a task needs one.
+devenv's own registration is no longer manual: `firstmate/data/projects.md`
+seeds `$FM_HOME/data/projects.md` on any fresh Firstmate home, the same way
+`firstmate/config/` seeds `$FM_HOME/config/` (see decisions table). For every
+other project, the owner still tells the first mate about it once (name, URL,
+delivery mode). Firstmate's home survives rebuilds; project clones don't, and
+it re-clones when a task needs one.
 
 ### 3. Smaller items
 

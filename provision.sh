@@ -190,7 +190,7 @@ step_git_identity() {
 
 # 8. Firstmate: clone the fork's main only when absent; never touch existing
 # code here (automatic updates happen at first-mate start, lib/firstmate.sh).
-# Starting config files are copied only where absent.
+# Starting config and data files are copied only where absent.
 step_firstmate() {
   local f name
   if [ ! -e "$FM_HOME" ] || { [ -d "$FM_HOME" ] && [ -z "$(ls -A "$FM_HOME")" ]; }; then
@@ -215,6 +215,15 @@ step_firstmate() {
     if [ ! -e "$FM_HOME/config/$name" ]; then
       cp "$f" "$FM_HOME/config/$name"
       ok "Firstmate config/$name set to $(tr -d '[:space:]' < "$f")"
+    fi
+  done
+  mkdir -p "$FM_HOME/data"
+  for f in "$DEVENV_ROOT"/firstmate/data/*; do
+    [ -f "$f" ] || continue
+    name=${f##*/}
+    if [ ! -e "$FM_HOME/data/$name" ]; then
+      cp "$f" "$FM_HOME/data/$name"
+      ok "Firstmate data/$name seeded"
     fi
   done
 }
