@@ -139,8 +139,8 @@ Edit it and run `sbx env run` again; no recreate is needed.
 | Command | Where | What |
 |---|---|---|
 | `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, secret files, checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings. |
-| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate ahead of its pin, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
-| `devenv bump …` | a writable clone | Update `versions.env`: `firstmate`, `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
+| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
+| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
 | `devenv test` | sandbox or any Docker host | Status line byte-identity, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), and a simulated sbx create that runs the kit's own install and startup steps. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
@@ -159,10 +159,37 @@ devenv bump --repo ~/src/devenv --list
 devenv bump --repo ~/src/devenv herdr 0.9.1      # warns loudly: Firstmate has not verified 0.9.1
 ```
 
-Claude Code is not pinned; it updates itself. Firstmate is pinned to a commit
-that only fresh setups check out; an existing clone is never reset, so
-`/updatefirstmate` keeps working. `devenv check` then warns that Firstmate is
-ahead of its pin, and `devenv bump firstmate` records the new commit.
+Claude Code and Firstmate are not pinned: Claude Code updates itself, and
+Firstmate updates automatically (next section).
+
+## Firstmate updates
+
+Firstmate comes from the owner's fork, `digigrant/firstmate`
+(`FIRSTMATE_REPO`), which follows `kunchenguid/firstmate`
+(`FIRSTMATE_UPSTREAM`). Fresh setups clone the fork's `main`. Then, every time
+`devenv entry` starts a first mate (a sandbox start or rebuild with
+`DEVENV_ENTRY=herdr`; never under a running first mate):
+
+1. **Fork sync.** When the fork's `main` is strictly behind upstream, GitHub's
+   Sync fork fast-forwards it, as gej-machine. If the fork has commits of its
+   own, the sync stops and `devenv check` warns; it never merges.
+2. **Local update.** Firstmate's own `bin/fm-update.sh` fast-forwards
+   `~/dev/firstmate` (and any secondmates) to the fork's `main`. A dirty or
+   diverged clone is skipped, and `devenv check` warns.
+
+Both results print at entry and show as notes in `devenv check`; a failure
+is a warning, so it also appears in Claude's status line. During a long
+session, `/updatefirstmate` in the first mate updates it on demand. Set
+`FIRSTMATE_AUTO_UPDATE=off` in `devenv.conf` to pause both steps.
+
+Upstream changes arrive unreviewed, including Firstmate's own rules in its
+`AGENTS.md`. The sync needs:
+
+- nothing on the fork's `main` that stops gej-machine from updating it (a
+  ruleset that requires pull requests does, with HTTP 422);
+- the `workflow` scope on the gej-machine token when the new upstream commits
+  change `.github/workflows/` (otherwise the sync fails with a warning until
+  you add the scope or click Sync fork on GitHub).
 
 ## Plain mode (no sbx)
 

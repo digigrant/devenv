@@ -17,25 +17,36 @@ days_until() {
   echo $(( (t - $(date +%s)) / 86400 ))
 }
 
-check_firstmate_pin() {
-  local head pin=$FIRSTMATE_COMMIT n
+check_firstmate() {
+  local head up n f line
   if [ ! -d "$FM_HOME/.git" ]; then
     _check_warn "firstmate home missing ($FM_HOME) — run provision.sh"
     return
   fi
   head=$(git -C "$FM_HOME" rev-parse HEAD 2>/dev/null) || { _check_warn "firstmate: cannot read HEAD in $FM_HOME"; return; }
-  [ "$head" = "$pin" ] && return
-  if ! git -C "$FM_HOME" cat-file -e "$pin^{commit}" 2>/dev/null; then
-    _check_warn "firstmate pin ${pin:0:12} is not in the local clone — run: git -C \"\$FM_HOME\" fetch"
-  elif git -C "$FM_HOME" merge-base --is-ancestor "$pin" "$head"; then
-    n=$(git -C "$FM_HOME" rev-list --count "$pin..$head")
-    _check_warn "firstmate $n commits ahead of pin — run: devenv bump firstmate"
-  elif git -C "$FM_HOME" merge-base --is-ancestor "$head" "$pin"; then
-    n=$(git -C "$FM_HOME" rev-list --count "$head..$pin")
-    _check_warn "firstmate $n commits behind pin — update it with /updatefirstmate"
-  else
-    _check_warn "firstmate diverged from pin"
+  # Against the fork's main as of the last fetch (the automatic update, or
+  # /updatefirstmate, fetches it).
+  if up=$(git -C "$FM_HOME" rev-parse -q --verify refs/remotes/origin/main 2>/dev/null); then
+    if ! git -C "$FM_HOME" merge-base --is-ancestor "$head" "$up"; then
+      n=$(git -C "$FM_HOME" rev-list --count "$up..$head")
+      _check_warn "firstmate has $n commits that your fork's main doesn't; automatic updates skip it (fast-forward only)"
+    else
+      n=$(git -C "$FM_HOME" rev-list --count "$head..$up")
+      [ "$n" -gt 0 ] && _check_note "firstmate is $n commits behind your fork (updates when the first mate next starts, or run /updatefirstmate)"
+    fi
   fi
+  if [ "$FIRSTMATE_AUTO_UPDATE" != on ]; then
+    _check_note "firstmate automatic updates are off (FIRSTMATE_AUTO_UPDATE)"
+    return
+  fi
+  for f in firstmate-sync firstmate-update; do
+    [ -s "$DEVENV_CACHE/$f" ] || continue
+    line=$(head -n 1 "$DEVENV_CACHE/$f")
+    case "$f:$line" in
+      *": failed:"*|*": stopped:"*|firstmate-update:*": skipped"*) _check_warn "$line" ;;
+      *) _check_note "last $line" ;;
+    esac
+  done
 }
 
 # Normalize a git remote URL for comparison: no trailing slash or .git.
@@ -137,7 +148,7 @@ cmd_check() {
   [ "${1:-}" = --quiet ] && quiet=1
   [ -n "${WORKSPACE:-}" ] || resolve_paths
   _CHECK_WARNINGS=() _CHECK_NOTES=()
-  check_firstmate_pin
+  check_firstmate
   check_firstmate_origin
   check_tool_versions
   check_herdr_manifest

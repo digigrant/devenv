@@ -36,6 +36,10 @@ ensure_firstmate_workspace() {
     herdr workspace focus "$ws" >/dev/null 2>&1 || true
   else
     [ -d "$FM_HOME" ] || die "Firstmate home $FM_HOME is missing; run provision.sh"
+    # A new first mate is about to start: bring Firstmate up to date first
+    # (FIRSTMATE_AUTO_UPDATE), so it never changes under a running one.
+    firstmate_sync_fork
+    firstmate_update_home
     out=$(herdr workspace create --cwd "$FM_HOME" --label firstmate --focus)
     pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty')
     [ -n "$pane" ] || die "herdr did not return a pane for the new workspace: $out"

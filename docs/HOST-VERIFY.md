@@ -283,6 +283,23 @@ Expected: no `MISSING:` lines and no `NEEDS_GH_AUTH`. A
 `PRESENTATION_UNAVAILABLE: lavish-axi` note is expected (Lavish is out of
 scope and Firstmate says non-visual work proceeds without it).
 
+### Automatic Firstmate updates
+
+**(in sandbox)** after a create or `sbx stop dev` + `sbx env run`:
+```sh
+git -C ~/dev/firstmate remote get-url origin      # https://github.com/digigrant/firstmate
+devenv check | grep -i firstmate                  # "last firstmate sync: …" and "last firstmate update: …" notes, no ⚠
+git -C ~/dev/firstmate log --oneline -1           # the fork's main (also on GitHub)
+```
+
+If `~/dev/firstmate` was cloned earlier from `kunchenguid/firstmate`,
+`devenv check` warns about its origin; fix it (in the sandbox) with
+`git -C "$FM_HOME" remote set-url origin https://github.com/digigrant/firstmate`.
+Expected sync notes: `… is up to date with kunchenguid/firstmate` or
+`fast-forwarded digigrant/firstmate by N commits`. A `failed:` warning that
+names the `workflow` scope means upstream changed workflow files (see README,
+Firstmate updates).
+
 ---
 
 ## 7. Acceptance checks
@@ -296,7 +313,7 @@ scope and Firstmate says non-visual work proceeds without it).
 | AC5 | **(in sandbox)** `bash "$DEVENV_DIR/tests/statusline-identity.sh"` | `statusline identity: PASS (5 fixtures)` |
 | AC6 | V10, and again after the V6 recreate | as in V10 |
 | AC7 | **(in sandbox)** type `/gril` in the first-mate pane; then `mkdir -p ~/.treehouse/skilltest && cd ~/.treehouse/skilltest && claude` and type `/gril` | `/grill-me` and `/grilling` listed in both |
-| AC8 | **(in sandbox)** `WARN_DAYS=60 devenv check`; `git -C ~/dev/firstmate commit --allow-empty -m test && devenv check`; `DEVENV_ENTRY=shell devenv entry` | token expiry warning (bot token expires 2026-10-25), "firstmate 1 commits ahead of pin", warnings printed in yellow, `⚠ devenv:N` in Claude's status line. Undo with `git -C ~/dev/firstmate reset --hard HEAD~1 && devenv check` |
+| AC8 | **(in sandbox)** `WARN_DAYS=60 devenv check`; `git -C ~/dev/firstmate commit --allow-empty -m test && devenv check`; `DEVENV_ENTRY=shell devenv entry` | token expiry warning (the current bot token expires 2026-12-24), "firstmate has 1 commits that your fork's main doesn't", warnings printed in yellow, `⚠ devenv:N` in Claude's status line. Undo with `git -C ~/dev/firstmate reset --hard HEAD~1 && devenv check` |
 | AC9 | already verified in the sandbox by the agent (PR description) | — |
 | AC10 | V6 | as in V6 |
 | AC11 | **(in sandbox)** `git config --global user.name; git config --global user.email; gh api user --jq .login` | `gej-machine`, `318032932+gej-machine@users.noreply.github.com`, `gej-machine`. Optionally ask the first mate for a throwaway draft PR to confirm push and `gh pr create`, then close it |

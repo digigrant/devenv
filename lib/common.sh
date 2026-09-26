@@ -81,7 +81,7 @@ expand_home() {
 load_config() {
   local k kv saved=() had_sandbox_name=0 runtime_sandbox_name=${SANDBOX_NAME:-}
   local keep=(WARN_DAYS DEVENV_STATUSLINE_WARNINGS ANTHROPIC_TOKEN_EXPIRES DEVENV_SKILLS CLAUDE_AUTH
-              DEVENV_STAGE_PAYLOAD FIRSTMATE_REPO PLAIN_WORKSPACE_DIR)
+              DEVENV_STAGE_PAYLOAD FIRSTMATE_REPO FIRSTMATE_AUTO_UPDATE PLAIN_WORKSPACE_DIR)
   [ -n "${SANDBOX_NAME+x}" ] && had_sandbox_name=1
   for k in "${keep[@]}"; do
     [ -n "${!k+x}" ] && saved+=("$k=${!k}")

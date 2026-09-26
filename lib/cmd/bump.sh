@@ -2,7 +2,6 @@
 # devenv bump: update pins in versions.env (spec §6.8). Edits a writable
 # devenv checkout and prints the diff; never commits or pushes.
 #
-#   devenv bump [--repo PATH] firstmate
 #   devenv bump [--repo PATH] herdr <version>
 #   devenv bump [--repo PATH] herdr-manifest <commit|latest>
 #   devenv bump [--repo PATH] treehouse <version|latest>
@@ -13,7 +12,7 @@
 
 HERDR_MANIFEST_PATH=distribution/agent-detection/claude.toml
 
-bump_usage() { sed -n '5,13p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
+bump_usage() { sed -n '5,12p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
 
 # GitHub REST call: gh when it works, anonymous curl otherwise.
 gh_api() {
@@ -46,13 +45,6 @@ herdr_verified_versions() {
   local doc="$FM_HOME/docs/herdr-backend.md"
   [ -f "$doc" ] || return 0
   grep -m1 -i 'verification covers versions' "$doc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true
-}
-
-bump_firstmate() {
-  local head
-  [ -d "$FM_HOME/.git" ] || die "no Firstmate clone at $FM_HOME"
-  head=$(git -C "$FM_HOME" rev-parse HEAD)
-  set_pin FIRSTMATE_COMMIT "$head"
 }
 
 bump_herdr() {
@@ -151,10 +143,10 @@ bump_list() {
   latest=$(curl -fsSL -m 20 https://nodejs.org/dist/index.json 2>/dev/null | jq -r '[.[] | select(.lts != false)][0].version // "?"')
   printf '%-22s %-14s %s\n' node "$NODE_VERSION" "${latest#v}"
   latest=$(git ls-remote "$FIRSTMATE_REPO" refs/heads/main 2>/dev/null | cut -c1-12)
-  printf '%-22s %-14s %s  (%s)\n' firstmate "${FIRSTMATE_COMMIT:0:12}" "${latest:-?}" "${FIRSTMATE_REPO#https://github.com/}"
+  printf '%-22s %-14s %s  (%s; not pinned, updates automatically)\n' firstmate - "${latest:-?}" "${FIRSTMATE_REPO#https://github.com/}"
   if [ -n "${FIRSTMATE_UPSTREAM:-}" ]; then
     latest=$(git ls-remote "$FIRSTMATE_UPSTREAM" refs/heads/main 2>/dev/null | cut -c1-12)
-    printf '%-22s %-14s %s  (%s; sync the fork on GitHub to pick it up)\n' firstmate-upstream - "${latest:-?}" "${FIRSTMATE_UPSTREAM#https://github.com/}"
+    printf '%-22s %-14s %s  (%s; synced into the fork automatically)\n' firstmate-upstream - "${latest:-?}" "${FIRSTMATE_UPSTREAM#https://github.com/}"
   fi
 }
 
@@ -183,7 +175,6 @@ cmd_bump() {
   cp "$BUMP_FILE" "$BUMP_BACKUP"
   local what=$1; shift
   case "$what" in
-    firstmate) bump_firstmate ;;
     herdr) bump_herdr "$@" ;;
     herdr-manifest) bump_herdr_manifest "$@" ;;
     treehouse|no-mistakes) bump_gotool "$what" "$@" ;;

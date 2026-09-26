@@ -188,12 +188,13 @@ step_git_identity() {
   ok "git identity $BOT_LOGIN <$BOT_EMAIL>"
 }
 
-# 8. Firstmate: clone at the pin only when absent; never touch existing code.
+# 8. Firstmate: clone the fork's main only when absent; never touch existing
+# code here (automatic updates happen at first-mate start, lib/firstmate.sh).
 # Starting config files are copied only where absent.
 step_firstmate() {
   local f name
   if [ ! -e "$FM_HOME" ] || { [ -d "$FM_HOME" ] && [ -z "$(ls -A "$FM_HOME")" ]; }; then
-    log "cloning Firstmate into $FM_HOME at ${FIRSTMATE_COMMIT:0:12}"
+    log "cloning Firstmate ($FIRSTMATE_REPO) into $FM_HOME"
     mkdir -p "$(dirname "$FM_HOME")"
     if ! GIT_TERMINAL_PROMPT=0 git clone --quiet "$FIRSTMATE_REPO" "$FM_HOME"; then
       # Keep going: a failed clone should not tear down the whole sandbox.
@@ -201,9 +202,7 @@ step_firstmate() {
       warn "could not clone Firstmate from $FIRSTMATE_REPO (GitHub access?). Fix it, then re-run: $DEVENV_ROOT/provision.sh"
       return 0
     fi
-    git -C "$FM_HOME" checkout --quiet -B main "$FIRSTMATE_COMMIT"
-    git -C "$FM_HOME" branch --quiet --set-upstream-to=origin/main main
-    ok "Firstmate cloned at ${FIRSTMATE_COMMIT:0:12}"
+    ok "Firstmate cloned at $(git -C "$FM_HOME" rev-parse --short HEAD) (fork main)"
   elif [ -d "$FM_HOME/.git" ]; then
     ok "Firstmate present in $FM_HOME (left as is)"
   else

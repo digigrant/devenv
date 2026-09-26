@@ -96,7 +96,8 @@ for sk in grill-me grilling; do
   [ "$(as_tester "readlink ~/.claude/skills/$sk")" = "/devenv/skills/$sk" ] && pass "skill $sk linked" || bad "skill $sk not linked"
 done
 as_tester 'test -d ~/dev/firstmate/.git' && pass "Firstmate cloned into ~/dev/firstmate" || bad "Firstmate not cloned"
-[ "$(as_tester 'git -C ~/dev/firstmate rev-parse HEAD')" = "$FIRSTMATE_COMMIT" ] && pass "Firstmate at the pin" || bad "Firstmate not at the pin"
+[ "$(as_tester 'git -C ~/dev/firstmate remote get-url origin')" = "$FIRSTMATE_REPO" ] && pass "Firstmate cloned from $FIRSTMATE_REPO" || bad "Firstmate origin"
+[ "$(as_tester 'git -C ~/dev/firstmate rev-parse HEAD')" = "$(as_tester 'git -C ~/dev/firstmate rev-parse origin/main')" ] && pass "Firstmate at the fork's main" || bad "Firstmate not at the fork's main"
 [ "$(as_tester 'tr -d "[:space:]" < ~/dev/firstmate/config/backend')" = herdr ] && pass "Firstmate backend herdr" || bad "Firstmate backend"
 [ -z "$(as_tester 'git config --global user.name || true')" ] && pass "git identity untouched (--git-identity skip)" || bad "git identity was set"
 

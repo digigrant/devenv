@@ -31,6 +31,8 @@ case "$cmd" in
     . "$DEVENV_ROOT/lib/claude.sh"
     # shellcheck source=../lib/herdr.sh
     . "$DEVENV_ROOT/lib/herdr.sh"
+    # shellcheck source=../lib/firstmate.sh
+    . "$DEVENV_ROOT/lib/firstmate.sh"
     # shellcheck source=../lib/cmd/check.sh
     . "$DEVENV_ROOT/lib/cmd/check.sh"
     # shellcheck source=../lib/cmd/start.sh

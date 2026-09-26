@@ -59,7 +59,7 @@ as_agent() { sudo -u agent -H --preserve-env=IS_SANDBOX,SANDBOX_NAME,WORKSPACE_D
 [ "$(as_agent 'git config --global user.name')" = gej-machine ] && pass "git identity is the bot" || bad "git identity"
 . "$DEVENV/versions.env"
 [ "$(as_agent 'herdr --version' | grep -oE '[0-9.]+$')" = "$HERDR_VERSION" ] && pass "herdr on the agent's PATH" || bad "herdr"
-[ "$(as_agent 'git -C "$FM_HOME" rev-parse HEAD')" = "$FIRSTMATE_COMMIT" ] && pass "Firstmate cloned at the pin into the workspace" || bad "Firstmate"
+[ "$(as_agent 'git -C "$FM_HOME" rev-parse HEAD')" = "$(as_agent 'git -C "$FM_HOME" rev-parse origin/main')" ] && pass "Firstmate cloned at the fork's main into the workspace" || bad "Firstmate"
 n=$(as_agent "jq '[.hooks.SessionStart[].hooks[].command] | length' ~/.claude/settings.json")
 [ "$n" = 4 ] && pass "4 SessionStart hooks" || bad "SessionStart hooks: $n"
 
