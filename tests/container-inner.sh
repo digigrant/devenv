@@ -63,6 +63,7 @@ check_version() {  # <label> <command> <want>
 check_version herdr 'herdr --version' "$HERDR_VERSION"
 check_version treehouse 'treehouse --version' "$TREEHOUSE_VERSION"
 check_version no-mistakes 'no-mistakes --version' "$NO_MISTAKES_VERSION"
+[ "$(as_tester "$env_sh; echo \"\${NO_MISTAKES_TELEMETRY:-}\"")" = off ] && pass "no-mistakes telemetry off" || bad "NO_MISTAKES_TELEMETRY is not off"
 check_version gh-axi 'jq -r .version "$(npm root -g)/gh-axi/package.json"' "$NPM_GH_AXI"
 check_version chrome-devtools-axi 'jq -r .version "$(npm root -g)/chrome-devtools-axi/package.json"' "$NPM_CHROME_DEVTOOLS_AXI"
 check_version tasks-axi 'jq -r .version "$(npm root -g)/tasks-axi/package.json"' "$NPM_TASKS_AXI"
