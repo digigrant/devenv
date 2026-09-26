@@ -10,9 +10,30 @@ Where a check fails, its fallback is listed. Don't apply fallbacks yourself;
 report the output and the agent will push the fix to this PR.
 
 The old `claude-dev` sandbox keeps running alongside `dev` until the
-switchover (spec §9, Phase 5). Both mount `~/dev`.
+switchover (spec §9, Phase 5). They no longer share a workspace: `claude-dev`
+mounts `~/dev`, and `dev` mounts `~/devenv/dev`.
+
+While this PR is open, the sandbox is built from its branch:
+`--kit-arg ref=initial-setup` makes the kit clone that branch instead of
+`main`. Drop the flag once the PR is merged.
 
 ---
+
+## 0. Moving from the first layout (once)
+
+The first version mounted `~/devenv` read-only and used `~/dev` as the
+workspace. The `dev` sandbox built that way has to be removed before building
+the new one (workspaces and kits only change at create):
+
+```sh
+cd ~/devenv && sbx env rm        # approve; deletes the sandbox and its scoped secrets, not ~/dev
+git -C ~/devenv pull             # the branch with the new layout
+```
+
+What `dev` left in `~/dev` (`~/dev/firstmate`, `~/dev/.devenv-state`) is no
+longer used; the new sandbox starts a fresh Firstmate home in
+`~/devenv/dev/firstmate`. Leave the old folders for now (`claude-dev` still
+mounts `~/dev`); they go in Phase 5.
 
 ## 1. Prerequisites
 
@@ -28,14 +49,15 @@ Expected: sbx **0.45.x** or newer; `server` is `running`; `sbx ls` lists
 `balanced` baseline). If `sbx ls` complains about login, run `sbx login`.
 If the policy list is empty, run `sbx policy init balanced`.
 
-## 2. Clone devenv next to the workspace
+## 2. Clone devenv
 
 ```sh
 git clone -b initial-setup https://github.com/digigrant/devenv ~/devenv   # after merge: without -b
 ls ~/devenv
 ```
 
-Expected: the repo files, in `~/devenv`, beside (not inside) `~/dev`.
+Expected: the repo files in `~/devenv`, outside `~/dev`. (Skip if you already
+have it; step 0 pulled it.)
 
 ## 3. Secrets
 
@@ -49,8 +71,7 @@ ls -l ~/.config/devenv/secrets
 Expected: two files, `-rw-------`, owned by you. The github secret must be the
 **gej-machine** token (never your personal one). The anthropic file holds the
 setup-token (`sk-ant-oat01-…`); `devenv host-prepare` turns it into a custom
-secret (see V1). If you know when the setup-token expires, put the date in
-your report and the agent will set `ANTHROPIC_TOKEN_EXPIRES`.
+secret (see V1). (Skip if already done.)
 
 ## 4. Doctor
 
@@ -59,13 +80,14 @@ your report and the agent will set `ANTHROPIC_TOKEN_EXPIRES`.
 ```
 
 Expected: every line `ok`, including `…/secrets/anthropic (0600, a
-setup-token)` and `github secret authenticates as gej-machine (… expires …)`,
+setup-token)`, `github secret authenticates as gej-machine (… expires …)` and
+`not inside any sandbox workspace; only dev/ is shared with the sandbox`,
 except warnings for "ANTHROPIC_TOKEN_EXPIRES is not set" and "on
-initial-setup, not main" (while testing the PR branch); on WSL a
-note that the Linux sbx is "best-effort" there; the operating rule at the end.
-If GitHub rejects the github secret (HTTP 401), make a new classic `repo`
-token for gej-machine and write it to the file again. `devenv host-prepare`
-refuses to create the sandbox until it passes.
+initial-setup, not main" (while testing the PR branch); on WSL a note that the
+Linux sbx is "best-effort" there; the operating rule at the end (it now names
+`~/devenv/dev` and `git clean -x`). If GitHub rejects the github secret (HTTP
+401), make a new classic `repo` token for gej-machine and write it to the file
+again. `devenv host-prepare` refuses to create the sandbox until it passes.
 
 Also check that doctor refuses unsafe setups (AC13). Each must print a `FAIL`
 line and exit 1:
@@ -77,40 +99,42 @@ chmod 600 ~/.config/devenv/secrets/github
 
 # Pretend a sandbox mounts your whole home (which contains ~/devenv):
 DEVENV_EXTRA_WORKSPACES=$HOME ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
+
+# Pretend a sandbox mounts a folder of the checkout other than dev/:
+DEVENV_EXTRA_WORKSPACES=$HOME/devenv/lib ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
 ```
 
-Expected: `FAIL … secrets/github is mode 644` with exit=1, then
-`FAIL the devenv checkout overlaps a sandbox workspace (/home/<you>)` with
-exit=1. (Nothing here writes to or runs from `~/dev`.)
+Expected: `FAIL … secrets/github is mode 644` with exit=1; then
+`FAIL the devenv checkout (/home/<you>/devenv) is inside a sandbox workspace
+(/home/<you>)` with exit=1; then `FAIL a sandbox workspace
+(/home/<you>/devenv/lib) is inside the devenv checkout; only
+/home/<you>/devenv/dev may be` with exit=1. (Nothing here writes to or runs
+from a workspace.)
 
 ## 5. Plan and create
 
 ```sh
-cd ~/devenv && sbx env plan
+cd ~/devenv && sbx env plan --kit-arg ref=initial-setup
 ```
 
 Paste the whole plan. It should show: sandbox `dev`; agent/kit `devenv` from
-`./kits/devenv` extending `claude`; workspace `/home/<you>/dev` (read-write);
-additional workspace `/home/<you>/devenv` (read-only); env `DEVENV_ENTRY=herdr`;
-the `github` secret from a command (no `anthropic` secret); a `github` binding for
-`api.github.com` and `github.com`; skills `readonly`; the `devenv host-prepare`
-lifecycle command.
-
-If the plan rejects `agent: devenv` (V2), try the spec's original form: in
-`sbxenv.yaml` replace the `agent:` and `kits:` lines with
-`agent: ./kits/devenv`, re-run `sbx env plan`, and report which form worked.
+`./kits/devenv` extending `claude`, with kit arguments `ref=initial-setup`
+(and `repo`); workspace `/home/<you>/devenv/dev` (read-write) and **no**
+additional workspaces; env `DEVENV_ENTRY=herdr`; the `github` secret from a
+command (no `anthropic` secret); a `github` binding for `api.github.com` and
+`github.com`; skills `off`; the `devenv host-prepare` lifecycle command.
 
 Then:
 
 ```sh
-sbx kit inspect ./kits/devenv      # if this subcommand exists: shows the resolved kit
-cd ~/devenv && sbx env run
+cd ~/devenv && sbx env run --kit-arg ref=initial-setup
 ```
 
-Save the whole create output. The `devenv host-prepare` part should end with
+Save the whole create output. The `devenv host-prepare` part should include
+`created the workspace /home/<you>/devenv/dev` (first run only) and end with
 `Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
 (placeholder)`. You should land in herdr, in a workspace named **firstmate**,
-with Claude starting in `~/dev/firstmate`, already signed in.
+with Claude starting in `~/devenv/dev/firstmate`, already signed in.
 
 If it fails with `failed to apply kit to sandbox`, sbx doesn't print the
 kit's install output, but the daemon log has it (tokens masked):
@@ -120,6 +144,10 @@ grep -h 'create sandbox failed' ~/.local/state/sandboxes/sandboxes/sandboxd/daem
   | sed -E 's/\\n/\n/g; s/(sk-ant-[a-z0-9]+-)[A-Za-z0-9_-]+/\1<redacted>/g; s/(gh[opsu]_)[A-Za-z0-9]+/\1<redacted>/g'
 cd ~/devenv && sbx env rm        # clean up the failed create before retrying
 ```
+
+If sbx rejects `--kit-arg` on a later `sbx env run` without it, or asks to
+recreate because the kit argument changed, report it; keep passing the flag
+until the PR is merged.
 
 ---
 
@@ -155,8 +183,9 @@ and `/login` once per rebuild.
    ```
    Report whether the server is still `running` and the `firstmate` workspace
    still exists after the detach.
-3. Re-attach: `cd ~/devenv && sbx env run`. Expected: back in the same
-   workspace, still exactly **one** `firstmate` workspace (AC3).
+3. Re-attach: `cd ~/devenv && sbx env run --kit-arg ref=initial-setup`.
+   Expected: back in the same workspace, still exactly **one** `firstmate`
+   workspace (AC3).
 
 **(in sandbox)** — check whether inherited claude flags reach the entrypoint:
 ```sh
@@ -166,84 +195,86 @@ cat /proc/1/cmdline 2>/dev/null | tr '\0' ' '; echo; ps -eo pid,args | grep -E '
 Fallback if the kit can't be used as the agent: the mixin form described at
 the top of `kits/devenv/spec.yaml`.
 
-### V4: skills in sbx's shared store
+### V4: skills
 
+sbx's shared skills store is off for `dev` (it is only mounted for sbx's
+built-in agents); `devenv start` links devenv's skills from the clone instead.
+
+**(in sandbox)**
 ```sh
-sbx skills ls
+ls -la ~/.claude/skills
+mount | grep -c '/.claude/skills'
 ```
 
-Expected: `grill-me` and `grilling`. The `devenv host-prepare` output (during
-`sbx env run`) says `skills in the sbx store (import)` or `(copy)`; report
-which. **(in sandbox)** `ls -la ~/.claude/skills` lists both.
+Expected: `grill-me` and `grilling` are symlinks to
+`/home/agent/fm-projects/devenv/skills/…`, and the mount count is `0`. Then
+type `/gril` in the first-mate pane: both are listed (AC7 has the worktree
+half).
 
-Removal check (runs a throwaway copy, not your checkout):
-```sh
-rm -rf /tmp/devenv-skills-test && cp -r ~/devenv /tmp/devenv-skills-test
-mkdir -p /tmp/devenv-skills-test/skills/zz-devenv-test && printf -- '---\nname: zz-devenv-test\ndescription: test\n---\ntest\n' > /tmp/devenv-skills-test/skills/zz-devenv-test/SKILL.md
-/tmp/devenv-skills-test/bin/devenv skills-sync && sbx skills ls
-rm -rf /tmp/devenv-skills-test/skills/zz-devenv-test && /tmp/devenv-skills-test/bin/devenv skills-sync && sbx skills ls
-rm -rf /tmp/devenv-skills-test; ~/devenv/bin/devenv skills-sync
-```
-
-Expected: `zz-devenv-test` appears after the first sync and is gone after the
-second. Fallback if the store can't be filled: `sandboxOptions.skills: off`
-plus `DEVENV_SKILLS=link` (skills linked by `devenv start`).
-
-### V5: relative paths and mounts
+### V5: mounts
 
 **(in sandbox)**
 ```sh
 echo "WORKSPACE_DIR=$WORKSPACE_DIR DEVENV_DIR=$DEVENV_DIR"
-mount | grep -E ' /home/[^ ]*/(dev|devenv) ' ; touch "$DEVENV_DIR/x" 2>&1 | head -1
+mount | grep -E ' /home/[^ ]*/devenv' ; ls -la "$(dirname "$WORKSPACE_DIR")"
 ```
 
-Expected: `/home/<you>/dev` is read-write, `/home/<you>/devenv` is read-only
-(`touch` fails with "Read-only file system"), and only one mount for devenv
-(report any second mount sbx makes for the `sbxenv.yaml` folder itself).
-Fallback: `${{ env.fileDir }}` paths, then `~/devenv/bin/devenv up`.
+Expected: `WORKSPACE_DIR=/home/<you>/devenv/dev`,
+`DEVENV_DIR=/home/agent/fm-projects/devenv`; one read-write mount for
+`/home/<you>/devenv/dev`, and nothing else of the checkout. Report what
+`ls` shows next to `dev` (sbx mounts `sbxenv.yaml` read-only and writes its
+`CLAUDE.md` there).
 
 ### V6 and AC10: persistence across `sbx rm`
 
 **(in sandbox)** ask the first mate: *"Save to your memory: the devenv V6
 check word is lighthouse."* Then:
 ```sh
-ls ~/dev/.devenv-state/claude-memory/*/          # (in sandbox) the memory file is here
-ls ~/dev/firstmate/config ~/dev/firstmate/state ~/dev/firstmate/data 2>&1 | head
+ls "$WORKSPACE_DIR"/.devenv-state/claude-memory/*/          # (in sandbox) the memory file is here
+ls "$FM_HOME"/config "$FM_HOME"/state "$FM_HOME"/data 2>&1 | head
 ```
 
 Remove and rebuild from the host:
 ```sh
-cd ~/devenv && sbx env rm        # approve; this deletes the sandbox, not ~/dev
-cd ~/devenv && sbx env run
+cd ~/devenv && sbx env rm        # approve; this deletes the sandbox, not ~/devenv/dev
+cd ~/devenv && sbx env run --kit-arg ref=initial-setup
 ```
 
 **(in sandbox)** after the rebuild:
 ```sh
-ls -la ~/.claude/projects/*/memory                 # symlinks into ~/dev/.devenv-state/claude-memory
-grep -rl lighthouse ~/dev/.devenv-state/claude-memory
-ls ~/dev/firstmate/config; ls ~/fm-projects ~/.treehouse 2>&1 | head -3
+ls -la ~/.claude/projects/*/memory                 # symlinks into $WORKSPACE_DIR/.devenv-state/claude-memory
+grep -rl lighthouse "$WORKSPACE_DIR"/.devenv-state/claude-memory
+ls "$FM_HOME"/config; ls ~/fm-projects ~/.treehouse 2>&1 | head -3
 ```
 
 Expected: the memory is still there and linked; Firstmate's `config/`,
-`data/`, `state/` survived; `~/fm-projects` and `~/.treehouse` are gone or
-empty. Ask the first mate *"What is the devenv V6 check word?"*: it should
-answer lighthouse. Fallback: a `lifecycle.preRemove` hook.
+`data/`, `state/` survived; `~/fm-projects` holds only the freshly cloned
+`devenv`, and `~/.treehouse` is gone or empty. Ask the first mate *"What is
+the devenv V6 check word?"*: it should answer lighthouse. Fallback: a
+`lifecycle.preRemove` hook.
 
-### V7: devenv mount during `setup.install`
+### V7: the devenv clone at create
 
-**Passed** on the first host run (2026-09-25): the install step saw the
-checkout. From the daemon log (or the create output):
+(Replaces the first layout's "read-only mount during install".) From the
+create output or the daemon log:
 ```text
-devenv: install sees WORKSPACE_DIR=/home/<you>/dev; checkout mount /home/<you>/devenv: README.md bin ...
-devenv: provisioning from /home/<you>/devenv
+devenv: cloning https://github.com/digigrant/devenv (initial-setup) into /home/agent/fm-projects/devenv
+devenv: provisioning from /home/agent/fm-projects/devenv at <commit> <subject>
 ```
 
-Expected: the file list is not empty. Fallback: `DEVENV_STAGE_PAYLOAD=on`.
+**(in sandbox)**
+```sh
+git -C "$DEVENV_DIR" status -sb | head -n 1; git -C "$DEVENV_DIR" log --oneline -1
+devenv check | grep 'devenv runs from'
+```
+
+Expected: `## initial-setup...origin/initial-setup`, the branch's head commit,
+and `devenv runs from /home/agent/fm-projects/devenv, on initial-setup at …`.
 
 ### V10: settings survive a restart
 
 ```sh
-sbx stop dev && cd ~/devenv && sbx env run
+sbx stop dev && cd ~/devenv && sbx env run --kit-arg ref=initial-setup
 ```
 
 **(in sandbox)**
@@ -281,24 +312,29 @@ devenv doctor
 
 Expected: no `MISSING:` lines and no `NEEDS_GH_AUTH`. A
 `PRESENTATION_UNAVAILABLE: lavish-axi` note is expected (Lavish is out of
-scope and Firstmate says non-visual work proceeds without it).
+scope and Firstmate says non-visual work proceeds without it). While the
+sandbox is built from `initial-setup`, Firstmate may report its devenv
+project clone as off the default branch; that is expected until the merge.
 
 ### Automatic Firstmate updates
 
 **(in sandbox)** after a create or `sbx stop dev` + `sbx env run`:
 ```sh
-git -C ~/dev/firstmate remote get-url origin      # https://github.com/digigrant/firstmate
+git -C "$FM_HOME" remote get-url origin           # https://github.com/digigrant/firstmate
 devenv check | grep -i firstmate                  # "last firstmate sync: …" and "last firstmate update: …" notes, no ⚠
-git -C ~/dev/firstmate log --oneline -1           # the fork's main (also on GitHub)
+git -C "$FM_HOME" log --oneline -1                # the fork's main (also on GitHub)
 ```
 
-If `~/dev/firstmate` was cloned earlier from `kunchenguid/firstmate`,
-`devenv check` warns about its origin; fix it (in the sandbox) with
-`git -C "$FM_HOME" remote set-url origin https://github.com/digigrant/firstmate`.
 Expected sync notes: `… is up to date with kunchenguid/firstmate` or
 `fast-forwarded digigrant/firstmate by N commits`. A `failed:` warning that
 names the `workflow` scope means upstream changed workflow files (see README,
 Firstmate updates).
+
+### Projects
+
+Tell the first mate: *"devenv is https://github.com/digigrant/devenv; its
+clone is ~/fm-projects/devenv; ship it direct-PR."* It should register the
+existing clone rather than clone it again. AC11 then exercises a PR.
 
 ---
 
@@ -307,13 +343,13 @@ Firstmate updates).
 | AC | How | Expected |
 |---|---|---|
 | AC1 | steps 5 and V6 | `sbx env run` builds `dev` with no manual steps (Claude signs in with the setup-token) |
-| AC2 | the first-mate pane | Claude banner "Opus 5.5 with xhigh effort", status line `effort:xhigh`, cwd `~/dev/firstmate`; V12 clean |
+| AC2 | the first-mate pane | Claude banner "Opus 5.5 with xhigh effort", status line `effort:xhigh`, cwd `~/devenv/dev/firstmate`; V12 clean |
 | AC3 | V2 step 3 | one `firstmate` workspace after re-running `sbx env run` |
-| AC4 | edit `env.DEVENV_ENTRY` in `~/devenv/sbxenv.yaml` to `claude`, `sbx env run`; then `shell`; then back to `herdr` | plain Claude in `~/dev`; then a bash prompt; no recreate. (Don't commit the edit.) Note: until the Phase 5 cleanup, Claude in `~/dev` uses the old project-level status line |
+| AC4 | edit `env.DEVENV_ENTRY` in `~/devenv/sbxenv.yaml` to `claude`, `sbx env run`; then `shell`; then back to `herdr` | plain Claude in `~/devenv/dev`; then a bash prompt; no recreate. (Don't commit the edit.) |
 | AC5 | **(in sandbox)** `bash "$DEVENV_DIR/tests/statusline-identity.sh"` | `statusline identity: PASS (5 fixtures)` |
 | AC6 | V10, and again after the V6 recreate | as in V10 |
 | AC7 | **(in sandbox)** type `/gril` in the first-mate pane; then `mkdir -p ~/.treehouse/skilltest && cd ~/.treehouse/skilltest && claude` and type `/gril` | `/grill-me` and `/grilling` listed in both |
-| AC8 | **(in sandbox)** `WARN_DAYS=60 devenv check`; `git -C ~/dev/firstmate commit --allow-empty -m test && devenv check`; `DEVENV_ENTRY=shell devenv entry` | token expiry warning (the current bot token expires 2026-12-24), "firstmate has 1 commits that your fork's main doesn't", warnings printed in yellow, `⚠ devenv:N` in Claude's status line. Undo with `git -C ~/dev/firstmate reset --hard HEAD~1 && devenv check` |
+| AC8 | **(in sandbox)** `WARN_DAYS=90 devenv check`; `git -C "$FM_HOME" commit --allow-empty -m test && devenv check`; `DEVENV_ENTRY=shell devenv entry` | token expiry warning (the current bot token expires 2026-12-24), "firstmate has 1 commits that your fork's main doesn't", warnings printed in yellow, `⚠ devenv:N` in Claude's status line. Undo with `git -C "$FM_HOME" reset --hard HEAD~1 && devenv check` |
 | AC9 | already verified in the sandbox by the agent (PR description) | — |
 | AC10 | V6 | as in V6 |
-| AC11 | **(in sandbox)** `git config --global user.name; git config --global user.email; gh api user --jq .login` | `gej-machine`, `318032932+gej-machine@users.noreply.github.com`, `gej-machine`. Optionally ask the first mate for a throwaway draft PR to confirm push and `gh pr create`, then close it |
+| AC11 | **(in sandbox)** `git config --global user.name; git config --global user.email; gh api user --jq .login` | `gej-machine`, `318032932+gej-machine@users.noreply.github.com`, `gej-machine`. Optionally ask the first mate for a throwaway draft PR on devenv (after "Projects" above) to confirm a worker's push and `gh pr create`, then close it |

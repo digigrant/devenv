@@ -1,7 +1,0 @@
-# Optional repositories to clone into the workspace on provisioning.
-# One per line: <git-url> [dir]
-#   dir is relative to the workspace ($WORKSPACE_DIR, or ~/dev in plain mode)
-#   and defaults to the repository name. Existing directories are left alone.
-# Example:
-#   https://github.com/digigrant/example-project
-#   https://github.com/digigrant/another-project another

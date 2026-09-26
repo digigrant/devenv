@@ -1,4 +1,4 @@
-# Build output of `devenv host-prepare` when DEVENV_STAGE_PAYLOAD=on (V7 fallback).
-/kits/devenv/files/home/.local/share/devenv-payload/
-# Rendered sbxenv (V5 fallback, `devenv up`).
-/.sbxenv.rendered.yaml
+# The sandbox workspace (sbxenv.yaml: workspace: ./dev). It belongs to the
+# sandbox: never run git, scripts or build tools in it from the host, and never
+# `git clean -x` here (it would delete the workspace).
+/dev/

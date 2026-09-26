@@ -219,21 +219,6 @@ step_firstmate() {
   done
 }
 
-# 12. Optional repositories from repos.txt.
-step_repos() {
-  local line url dir dest
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line%%#*}
-    read -r url dir _ <<<"$line" || true
-    [ -n "${url:-}" ] || continue
-    dir=${dir:-$(basename "$url" .git)}
-    dest="$WORKSPACE/$dir"
-    if [ -e "$dest" ]; then continue; fi
-    log "cloning $url into $dest"
-    GIT_TERMINAL_PROMPT=0 git clone --quiet "$url" "$dest" || warn "could not clone $url; re-run provision.sh later"
-  done < "$DEVENV_ROOT/repos.txt"
-}
-
 summary() {
   local t
   echo
@@ -283,9 +268,8 @@ step_git_identity
 step_firstmate
 install_herdr_config && ok "herdr config and Claude detection override in place"
 apply_claude_config with-integrations && ok "Claude settings, status line and CLAUDE.md applied"
-if [ "$MODE" = plain ] || [ "$DEVENV_SKILLS" = link ]; then link_skills; fi
+link_skills
 link_claude_memory && ok "Claude memory linked to $DEVENV_STATE_DIR/claude-memory"
-step_repos
 summary
 echo
 cmd_check

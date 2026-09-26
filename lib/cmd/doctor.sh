@@ -14,7 +14,11 @@ _wrn()  { printf '  %swarn%s  %s\n' "$_c_yel" "$_c_off" "$*"; _DOC_WARNS=$((_DOC
 _fail() { printf '  %sFAIL%s  %s\n' "$_c_red" "$_c_off" "$*"; _DOC_FAILS=$((_DOC_FAILS + 1)); }
 _info() { printf '  %s\n' "$*"; }
 
-DEVENV_OPERATING_RULE='Treat ~/dev as belonging to the sandbox: never run git, scripts or build tools in it from the host, because agents can plant git hooks or scripts there.'
+# The operating rule for the host (D28), about the workspace folder dev/ inside
+# the checkout. Needs DEVENV_REAL.
+operating_rule() {
+  printf '%s\n' "Treat $DEVENV_REAL/dev as belonging to the sandbox: never run git, scripts or build tools in it from the host, don't cd into it with a git-aware shell prompt or open it in an editor (agents can plant git hooks, git config or scripts there), and never run \`git clean -x\` in $DEVENV_REAL (it would delete the workspace)."
+}
 
 # Where is this running? host (sbx available, not a sandbox), sbx, or plain.
 doctor_location() {
@@ -32,11 +36,12 @@ path_within() {
 }
 
 # Workspaces the host's sandboxes mount, as reported by `sbx ls --json`
-# (best effort: the schema is not documented), plus the one sbxenv.yaml uses.
-# DEVENV_EXTRA_WORKSPACES (colon-separated) adds more, e.g. to test the check.
+# (best effort: the schema is not documented), plus ~/dev (the usual sbx
+# workspace, e.g. the old claude-dev sandbox's). DEVENV_EXTRA_WORKSPACES
+# (colon-separated) adds more, e.g. to test the check.
 host_workspaces() {
   local extra
-  printf '%s\n' "$(dirname "$DEVENV_REAL")/dev" "$HOME/dev"
+  printf '%s\n' "$HOME/dev"
   if [ -n "${DEVENV_EXTRA_WORKSPACES:-}" ]; then
     IFS=: read -r -a extra <<<"$DEVENV_EXTRA_WORKSPACES"
     printf '%s\n' "${extra[@]}"
@@ -46,6 +51,26 @@ host_workspaces() {
       | if type == "array" then .[] else . end | if type == "object" then (.path // .source // empty) else . end
       | strings' 2>/dev/null || true
   fi
+}
+
+# Problems with where the checkout sits, one per line; nothing when it is
+# right. The checkout's own dev/ is the sandbox workspace by design (Docker's
+# layout: sbxenv.yaml beside the workspace). Any other workspace must neither
+# contain the checkout nor lie inside it, so the sandbox can never write to the
+# code the host runs. Needs DEVENV_REAL.
+checkout_overlap_problems() {
+  local ws own
+  own=$(readlink -m "$DEVENV_REAL/dev")
+  while IFS= read -r ws; do
+    [ -n "$ws" ] || continue
+    [ "$(readlink -m "$ws")" = "$own" ] && continue
+    if path_within "$DEVENV_REAL" "$ws"; then
+      echo "the devenv checkout ($DEVENV_REAL) is inside a sandbox workspace ($ws); keep it outside, e.g. ~/devenv"
+    elif path_within "$ws" "$DEVENV_REAL"; then
+      echo "a sandbox workspace ($ws) is inside the devenv checkout; only $DEVENV_REAL/dev may be"
+    fi
+  done < <(host_workspaces | sort -u)
+  return 0
 }
 
 # Ask GitHub which account the github secret file authenticates as. The token
@@ -96,7 +121,7 @@ github_secret_problems() {
 }
 
 doctor_host() {
-  local v json state f mode owner ws dirty branch behind
+  local v json state f mode owner dirty branch behind
   DEVENV_REAL=$(readlink -f "$DEVENV_ROOT")
   echo "sbx"
   if ! have sbx; then
@@ -161,15 +186,10 @@ doctor_host() {
   fi
 
   echo "devenv checkout ($DEVENV_REAL)"
-  local inside=0
-  while IFS= read -r ws; do
-    [ -n "$ws" ] || continue
-    if path_within "$DEVENV_REAL" "$ws" || path_within "$ws" "$DEVENV_REAL"; then
-      _fail "the devenv checkout overlaps a sandbox workspace ($ws); move it outside, e.g. ~/devenv"
-      inside=1
-    fi
-  done < <(host_workspaces | sort -u)
-  [ "$inside" = 0 ] && _pass "not inside any sandbox workspace"
+  local overlap
+  overlap=$(checkout_overlap_problems)
+  if [ -z "$overlap" ]; then _pass "not inside any sandbox workspace; only dev/ is shared with the sandbox"
+  else while IFS= read -r t; do _fail "$t"; done <<<"$overlap"; fi
   if git -C "$DEVENV_REAL" rev-parse --git-dir >/dev/null 2>&1; then
     dirty=$(git -C "$DEVENV_REAL" status --porcelain 2>/dev/null)
     [ -z "$dirty" ] && _pass "checkout is clean" || _wrn "checkout has local changes (changes should arrive by PR)"
@@ -185,7 +205,7 @@ doctor_host() {
     _wrn "not a git checkout"
   fi
   echo
-  echo "Operating rule: $DEVENV_OPERATING_RULE"
+  echo "Operating rule: $(operating_rule)"
 }
 
 doctor_env() {

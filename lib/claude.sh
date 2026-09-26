@@ -83,11 +83,17 @@ merge_claude_settings() {
     | write_if_changed "$f" 0644
 }
 
-# Link devenv's skills into ~/.claude/skills (plain mode, and the sbx
-# fallback). A user's own skill that is not a symlink is never replaced.
+# Link devenv's skills into ~/.claude/skills, so every Claude session (the
+# first mate, workers in worktrees) sees them. sbx mounts its shared skills
+# store only for built-in agents, so sbxenv.yaml turns it off and devenv links
+# instead. A user's own skill that is not a symlink is never replaced.
 link_skills() {
   local dir=$HOME/.claude/skills s name target
-  mkdir -p "$dir"
+  mkdir -p "$dir" 2>/dev/null || true
+  if [ ! -w "$dir" ]; then
+    warn "~/.claude/skills is not writable (is sbx's skills store mounted there? set sandboxOptions.skills: \"off\"); skills not linked"
+    return 0
+  fi
   for s in "$DEVENV_ROOT"/skills/*/; do
     [ -f "$s/SKILL.md" ] || continue
     s=${s%/}; name=${s##*/}; target="$dir/$name"
@@ -147,5 +153,11 @@ claude_config_problems() {
   [ -f "$HOME/.claude/statusline-command.sh" ] && [ "$(file_sha256 "$HOME/.claude/statusline-command.sh")" = "$STATUSLINE_SHA256" ] \
     || echo "~/.claude/statusline-command.sh is missing or its sha256 is not $STATUSLINE_SHA256"
   cmp -s "$HOME/.claude/statusline.sh" "$CLAUDE_AGENT_DIR/statusline.sh" || echo "~/.claude/statusline.sh differs from devenv's"
+  for m in "$DEVENV_ROOT"/skills/*/; do
+    [ -f "$m/SKILL.md" ] || continue
+    m=${m%/}
+    [ "$(readlink "$HOME/.claude/skills/${m##*/}" 2>/dev/null)" = "$m" ] \
+      || echo "skill ${m##*/} is not linked into ~/.claude/skills (devenv start links it)"
+  done
   return 0
 }

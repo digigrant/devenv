@@ -6,8 +6,9 @@
 # shellcheck disable=SC1091,SC2015,SC2016
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-DEVENV=/home/owner/devenv
-WS=/home/owner/dev
+SRC=/src/devenv                     # this working tree, read-only
+CLONE=/home/agent/fm-projects/devenv # where the kit clones devenv
+WS=/home/owner/devenv/dev            # the workspace, beside the host's sbxenv.yaml
 fail=0
 pass() { echo "ok   $*"; }
 bad()  { echo "FAIL $*"; fail=1; }
@@ -29,9 +30,18 @@ install -o agent -g agent -m 0644 /dev/null /etc/sandbox-persistent.sh
 export IS_SANDBOX=1 SANDBOX_NAME=dev WORKSPACE_DIR=$WS NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 export PATH="/usr/local/share/npm-global/bin:$PATH"
 
-# The kit's snippets, taken from spec.yaml (8-space indented block scalars).
-install_snippet=$(awk '/^  install:/{f=1} f && /command: \|/{c=1; next} c && /^  startup:/{exit} c && /^        /{sub(/^        /, ""); print} c && /^    - /{exit}' "$DEVENV/kits/devenv/spec.yaml")
-startup_snippet=$(awk '/^  startup:/{f=1} f && /- \|$/{c=1; next} c && /^          /{sub(/^          /, ""); print}' "$DEVENV/kits/devenv/spec.yaml")
+# A git copy of the working tree on branch "sim", standing in for GitHub.
+mkdir -p /tmp/devenv-src
+tar -C "$SRC" --exclude=./.git --exclude=./dev -cf - . | tar -C /tmp/devenv-src --no-same-owner -xf -
+git -C /tmp/devenv-src init -q -b sim
+git -C /tmp/devenv-src add -A
+git -C /tmp/devenv-src -c user.name=sim -c user.email=sim@localhost commit -q -m "sbx simulation"
+
+# The kit's snippets, taken from spec.yaml (8-space indented block scalars),
+# with the kit arguments substituted the way sbx does before decoding.
+install_snippet=$(awk '/^  install:/{f=1} f && /command: \|/{c=1; next} c && /^  startup:/{exit} c && /^        /{sub(/^        /, ""); print} c && /^    - /{exit}' "$SRC/kits/devenv/spec.yaml" \
+  | sed -e 's|\${{ kit\.args\.repo }}|/tmp/devenv-src|g' -e 's|\${{ kit\.args\.ref }}|sim|g')
+startup_snippet=$(awk '/^  startup:/{f=1} f && /- \|$/{c=1; next} c && /^          /{sub(/^          /, ""); print}' "$SRC/kits/devenv/spec.yaml")
 [ -n "$install_snippet" ] && [ -n "$startup_snippet" ] || { echo "FAIL could not extract the kit snippets"; exit 1; }
 printf '%s\n' "$install_snippet" > /tmp/kit-install.sh
 printf '%s\n' "$startup_snippet" > /tmp/kit-startup.sh
@@ -46,20 +56,26 @@ snapshot() {
 
 echo "== setup.install (as root, like sbx create)"
 if sh /tmp/kit-install.sh > /tmp/install1.log 2>&1; then pass "kit install snippet"; else bad "kit install snippet"; tail -n 40 /tmp/install1.log; exit 1; fi
-grep -q "devenv: provisioning from $DEVENV" /tmp/install1.log && pass "found the read-only checkout mount" || bad "did not provision from $DEVENV"
+grep -q "devenv: cloning /tmp/devenv-src (sim) into $CLONE" /tmp/install1.log && pass "kit cloned devenv into $CLONE" || bad "kit did not clone devenv"
+grep -q "devenv: provisioning from $CLONE at" /tmp/install1.log && pass "provisioned from the clone" || bad "did not provision from $CLONE"
 snapshot > /tmp/snap1
 
 echo "== assertions"
 [ "$(stat -c %U /etc/sandbox-persistent.sh)" = agent ] && pass "/etc/sandbox-persistent.sh still owned by agent" || bad "/etc/sandbox-persistent.sh owner is $(stat -c %U /etc/sandbox-persistent.sh)"
 grep -q '^# >>> devenv >>>' /etc/sandbox-persistent.sh && pass "env block written" || bad "env block missing"
-grep -qx "DEVENV_DEFAULT_DIR=$DEVENV" /usr/local/bin/devenv-entry && pass "entrypoint shim points at the checkout" || bad "entrypoint shim"
+grep -qx "DEVENV_DEFAULT_DIR=$CLONE" /usr/local/bin/devenv-entry && pass "entrypoint shim points at the clone" || bad "entrypoint shim"
 others=$(find /home/agent "$WS" ! -user agent | head -n 5)
 [ -z "$others" ] && pass "everything in /home/agent and the workspace is owned by agent" || bad "files not owned by agent: $others"
 as_agent() { sudo -u agent -H --preserve-env=IS_SANDBOX,SANDBOX_NAME,WORKSPACE_DIR,NPM_CONFIG_PREFIX,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,NODE_EXTRA_CA_CERTS bash -c ". /etc/sandbox-persistent.sh; $1"; }
 [ "$(as_agent 'git config --global user.name')" = gej-machine ] && pass "git identity is the bot" || bad "git identity"
-. "$DEVENV/versions.env"
+. "$CLONE/versions.env"
 [ "$(as_agent 'herdr --version' | grep -oE '[0-9.]+$')" = "$HERDR_VERSION" ] && pass "herdr on the agent's PATH" || bad "herdr"
 [ "$(as_agent 'git -C "$FM_HOME" rev-parse HEAD')" = "$(as_agent 'git -C "$FM_HOME" rev-parse origin/main')" ] && pass "Firstmate cloned at the fork's main into the workspace" || bad "Firstmate"
+[ "$(as_agent 'echo "$DEVENV_DIR"')" = "$CLONE" ] && pass "DEVENV_DIR is the clone" || bad "DEVENV_DIR"
+[ "$(stat -c %U "$CLONE/.git")" = agent ] && [ -z "$(as_agent "git -C $CLONE status --porcelain")" ] && pass "the clone is the agent's and clean" || bad "the clone is not the agent's or is dirty"
+for sk in grill-me grilling; do
+  [ "$(readlink "/home/agent/.claude/skills/$sk")" = "$CLONE/skills/$sk" ] && pass "skill $sk linked from the clone" || bad "skill $sk not linked"
+done
 n=$(as_agent "jq '[.hooks.SessionStart[].hooks[].command] | length' ~/.claude/settings.json")
 [ "$n" = 4 ] && pass "4 SessionStart hooks" || bad "SessionStart hooks: $n"
 
@@ -74,6 +90,7 @@ printf '%s\n' "$out" | grep -q ENTRY-SHELL-OK && pass "devenv-entry opens a shel
 
 echo "== setup.install again (idempotent)"
 if sh /tmp/kit-install.sh > /tmp/install2.log 2>&1; then pass "second install"; else bad "second install"; tail -n 20 /tmp/install2.log; fi
+grep -q "devenv: using the existing clone in $CLONE" /tmp/install2.log && pass "second install kept the clone" || bad "second install did not reuse the clone"
 snapshot > /tmp/snap2
 diff -u /tmp/snap1 /tmp/snap2 && pass "second install changed nothing" || bad "second install changed files (diff above)"
 

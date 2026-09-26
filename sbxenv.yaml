@@ -2,30 +2,34 @@
 #
 #   cd ~/devenv && sbx env run
 #
-# This file lives in the devenv checkout on the host (~/devenv), a sibling of
-# the workspace (~/dev) and outside every folder the sandbox can write to.
+# Layout (Docker's environment-file layout: this file sits beside the
+# workspace, and the folder that holds it is never mounted):
+#
+#   ~/devenv/            this repo, on the host only
+#   ├── sbxenv.yaml
+#   └── dev/             the workspace (gitignored), read-write in the sandbox
+#
+# Inside the sandbox, devenv itself is a writable clone of the repo at
+# ~/fm-projects/devenv, made by the kit when the sandbox is created (the
+# `ref` kit argument picks the branch; default main). Test a branch with
+# `sbx env run --kit-arg ref=<branch>` when creating the sandbox.
+#
 # Relative paths resolve from this file's directory. Changes to workspaces,
 # kits, secrets and sandboxOptions apply when the sandbox is next created;
-# changes to `env` apply on the next `sbx env run`.
-# Passing no path also merges ~/.sbxenv.yaml if you have one; use
-# `sbx env run .` to skip it.
+# changes to `env` apply on the next `sbx env run`. Passing no path also
+# merges ~/.sbxenv.yaml if you have one; use `sbx env run .` to skip it.
 schemaVersion: "1"
 name: dev
 
 # The devenv kit forks the built-in claude agent (kind: sandbox, extends:
-# claude). `agent` names the kit; `kits` says where it is. (V2)
+# claude) so the sandbox opens herdr with the first mate. `agent` names the
+# kit; `kits` says where it is.
 agent: devenv
 kits:
   - ./kits/devenv
 
-# The workspace: the host's ~/dev, mounted read-write at the same path. (D6)
-workspace: ../dev
-
-# devenv itself, read-only inside the sandbox. provision.sh and `devenv start`
-# run from this mount. (V5, V7)
-additionalWorkspaces:
-  - path: .
-    readOnly: true
+# The workspace: Firstmate's home and the state that survives a rebuild.
+workspace: ./dev
 
 env:
   # What the sandbox opens: herdr (Firstmate) | claude | shell.
@@ -57,15 +61,16 @@ bindings:
         - github.com
 
 sandboxOptions:
-  # sbx's shared skills store, filled by `devenv host-prepare`. Set to `off`
-  # (and DEVENV_SKILLS=link in devenv.conf) if V4 falls back.
-  skills: readonly
+  # sbx mounts its shared skills store only for its built-in agents, not for
+  # a kit like this one. devenv's skills are linked into ~/.claude/skills from
+  # the devenv clone instead (`devenv start`), so the store stays off.
+  skills: "off"
   # memory: 12g            # default: 50% of host memory
 
 lifecycle:
   initialize:
     # Runs on the host before every create/run: checks the secret files and
-    # the checkout location, and syncs devenv/skills into the sbx store.
+    # the checkout location, creates dev/ and sets up the Claude sign-in.
     - name: devenv host-prepare
       command: ./bin/devenv host-prepare
       workdir: ${{ env.fileDir }}

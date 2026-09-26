@@ -2,13 +2,13 @@
 # devenv host-prepare: the sbxenv.yaml lifecycle.initialize hook (spec §6.9).
 # Runs on the host before every `sbx env run`:
 #   - doctor-lite: fail fast on missing/unsafe secret files, or a checkout
-#     that overlaps a sandbox workspace;
-#   - sync devenv/skills into sbx's shared skills store (V4);
-#   - stage the provisioning payload into the kit when DEVENV_STAGE_PAYLOAD=on (V7).
-# It never writes anywhere the sandbox can write.
+#     that overlaps a sandbox workspace other than its own dev/;
+#   - create the workspace folder dev/ beside sbxenv.yaml;
+#   - give the sandbox the Claude setup-token as a custom secret (V1).
+# It never reads anything from dev/, which the sandbox can write.
 
-# Uses path_within/host_workspaces (doctor.sh) and cmd_skills_sync
-# (skills-sync.sh); bin/devenv sources both.
+# Uses path_within, host_workspaces and checkout_overlap_problems (doctor.sh);
+# bin/devenv sources it.
 
 # The Claude setup-token as an sbx custom secret for this sandbox (V1).
 # The placeholder is random, created once, and kept on the host (never in the
@@ -50,18 +50,8 @@ sync_claude_auth() {
   esac
 }
 
-stage_payload() {
-  local dest="$DEVENV_ROOT/kits/devenv/files/home/.local/share/devenv-payload"
-  rm -rf "$dest.new"
-  mkdir -p "$dest.new"
-  (cd "$DEVENV_ROOT" && tar -cf - --exclude=.git --exclude=kits --exclude=.sbxenv.rendered.yaml .) | tar -xf - -C "$dest.new"
-  rm -rf "$dest"
-  mv "$dest.new" "$dest"
-  log "staged the provisioning payload in ${dest#"$DEVENV_ROOT"/} (V7 fallback)"
-}
-
 cmd_host_prepare() {
-  local f mode ws real
+  local f mode real
   [ "$(detect_mode)" = sbx ] && die "host-prepare runs on the host, not inside a sandbox"
   for f in github; do
     f="$HOME/.config/devenv/secrets/$f"
@@ -73,22 +63,19 @@ cmd_host_prepare() {
   done
   real=$(readlink -f "$DEVENV_ROOT")
   DEVENV_REAL=$real
-  while IFS= read -r ws; do
-    [ -n "$ws" ] || continue
-    if path_within "$real" "$ws" || path_within "$ws" "$real"; then
-      die "the devenv checkout ($real) overlaps a sandbox workspace ($ws); keep it outside, e.g. ~/devenv"
-    fi
-  done < <(host_workspaces | sort -u)
+  local problems
+  problems=$(checkout_overlap_problems)
+  [ -z "$problems" ] || die "$(head -n 1 <<<"$problems")"
   local t
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case "$t" in "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
   done <<<"$(github_secret_problems)"
   ok "secrets and checkout location look right"
-  sync_claude_auth
-  if [ "$DEVENV_SKILLS" = store ]; then
-    cmd_skills_sync || warn "skills were not synced into the sbx store; see docs/HOST-VERIFY.md (V4) for the fallback"
+  if [ ! -d "$real/dev" ]; then
+    mkdir -p "$real/dev"
+    ok "created the workspace $real/dev"
   fi
-  [ "$DEVENV_STAGE_PAYLOAD" = on ] && stage_payload
+  sync_claude_auth
   return 0
 }

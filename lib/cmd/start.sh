@@ -34,7 +34,7 @@ cmd_start() {
   apply_claude_config with-integrations || warn "applying Claude settings failed"
   install_herdr_config || warn "installing herdr config failed"
   link_claude_memory || warn "linking Claude memory failed"
-  if [ "$mode" = plain ] || [ "$DEVENV_SKILLS" = link ]; then link_skills || warn "linking skills failed"; fi
+  link_skills || warn "linking skills failed"
   cmd_check --quiet || true
   log "start done in $(( $(date +%s) - t0 ))s"
   return 0

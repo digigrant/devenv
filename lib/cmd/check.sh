@@ -61,6 +61,19 @@ check_firstmate_origin() {
   fi
 }
 
+# The devenv clone this environment runs from ($DEVENV_ROOT). In the sandbox
+# it is also Firstmate's project clone of devenv, which Firstmate keeps
+# fast-forwarded while it is a clean main; agents work on devenv in worktrees.
+check_devenv_clone() {
+  local br
+  git -C "$DEVENV_ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  br=$(git -C "$DEVENV_ROOT" symbolic-ref --short -q HEAD || echo "a detached HEAD")
+  _check_note "devenv runs from $DEVENV_ROOT, on $br at $(git -C "$DEVENV_ROOT" rev-parse --short HEAD)"
+  if [ "$(detect_mode)" = sbx ] && [ -n "$(git -C "$DEVENV_ROOT" status --porcelain 2>/dev/null | head -n 1)" ]; then
+    _check_warn "the devenv clone $DEVENV_ROOT has uncommitted changes, and this sandbox runs from it; change devenv in a worktree on a branch instead"
+  fi
+}
+
 check_tool_versions() {
   local t pin cur
   for t in "${DEVENV_BINARIES[@]}"; do
@@ -150,6 +163,7 @@ cmd_check() {
   _CHECK_WARNINGS=() _CHECK_NOTES=()
   check_firstmate
   check_firstmate_origin
+  check_devenv_clone
   check_tool_versions
   check_herdr_manifest
   check_github_token

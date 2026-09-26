@@ -1,10 +1,11 @@
-# Handoff: devenv implementation, session 1 → session 2
+# Handoff: devenv implementation
 
-Written 2026-09-26 at the end of the first implementation session. Read this,
-then [SPEC.md](SPEC.md) (the approved design), [README.md](../README.md) and
-[HOST-VERIFY.md](HOST-VERIFY.md). This file records what the code alone
-doesn't: decisions made with the owner after the spec, what is verified, and
-what is still open.
+Written 2026-09-26 at the end of the first implementation session; updated
+the same day in session 2, which restructured the sbx layer to Docker's
+layout. Read this, then [SPEC.md](SPEC.md) (the approved design),
+[README.md](../README.md) and [HOST-VERIFY.md](HOST-VERIFY.md). This file
+records what the code alone doesn't: decisions made with the owner after the
+spec, what is verified, and what is still open.
 
 ## Working rules (from the owner and the spec)
 
@@ -18,19 +19,20 @@ what is still open.
   terms and give options with a recommendation; the owner has asked for that.
 - The Firstmate fork (`digigrant/firstmate`) may be modified, **minimally**,
   and only after showing that unmodified Firstmate doesn't work.
-- Treat `~/dev` as belonging to the sandbox: never run git, scripts or build
-  tools in it on the host (D28). Never allow `herdr.dev`. No secrets in the
-  repo. Never add shell-completion scripts to `/etc/sandbox-persistent.sh`.
+- Treat the workspaces as belonging to the sandboxes (`~/devenv/dev` for `dev`,
+  `~/dev` for the old `claude-dev`): never run git, scripts or build tools in
+  them on the host (D28). Never allow `herdr.dev`. No secrets in the repo.
+  Never add shell-completion scripts to `/etc/sandbox-persistent.sh`.
 - Don't touch the owner's old `/home/gejoy/dev/.claude/` files until Phase 5,
   and only with the owner's confirmation.
 
 ## Where things stand
 
 - **PR:** https://github.com/digigrant/devenv/pull/1, branch `initial-setup`,
-  open, head `bca4ee5`. Its description lists V-item results, spec
-  differences and known risks. Keep it current. Note that `gh pr edit` fails
-  because the gej-machine token lacks `read:org`, so edit it with the REST
-  API: `gh api -X PATCH repos/digigrant/devenv/pulls/1 -F body=@file.md`.
+  open. Its description lists V-item results, spec differences and known
+  risks. Keep it current. Note that `gh pr edit` fails because the
+  gej-machine token lacks `read:org`, so edit it with the REST API:
+  `gh api -X PATCH repos/digigrant/devenv/pulls/1 -F body=@file.md`.
 - **Commits on the branch:**
 
   | Commit | What |
@@ -44,15 +46,20 @@ what is still open.
   | `e5cb8b9` | Claude signs in with the setup-token as an sbx custom secret (`CLAUDE_AUTH=token`) |
   | `67d285d` | Firstmate from the owner's fork `digigrant/firstmate` |
   | `bca4ee5` | automatic Firstmate updates at every first-mate start; the Firstmate pin removed |
+  | `ec8f3b3` | this handoff |
+  | session 2 | Docker's layout: workspace `./dev` in the checkout, no devenv mount, devenv cloned into the sandbox at create, skills linked |
 
-- **Tests:** `devenv test` passes at `bca4ee5`: status line byte-identity,
-  shellcheck, `provision.sh --plain` twice in `ubuntu:24.04` and
-  `ubuntu:26.04`, and the simulated sbx create (`tests/sbx-sim.sh`).
-- **Host (owner, WSL2, sbx 0.45.1):** HOST-VERIFY steps 1–4 passed. The first
-  real create exposed three problems, all fixed on the branch: a rejected
-  GitHub token, V1, and a missing `github` binding. The owner is re-running
-  HOST-VERIFY from step 5 with the current branch. Their latest results are
-  not recorded here, so ask for them.
+- **Tests:** `devenv test` passes after the restructure: status line
+  byte-identity, shellcheck, `provision.sh --plain` twice in `ubuntu:24.04`
+  and `ubuntu:26.04`, and the simulated sbx create (`tests/sbx-sim.sh`, which
+  now clones devenv from a git copy of the working tree).
+- **Host (owner, WSL2, sbx 0.45.1):** HOST-VERIFY steps 1–5 passed with the
+  first layout; some V-checks were run too. The owner confirmed that the first
+  mate saw no skills there although `sbx skills ls` listed them. The new
+  layout needs HOST-VERIFY again from step 0 (remove the old `dev`, pull).
+- `~/dev/firstmate` (the first layout's Firstmate home, still on the disk)
+  had its `origin` set to `digigrant/firstmate` in session 2. The new layout
+  doesn't use it.
 
 ## Decisions made after the spec
 
@@ -67,134 +74,75 @@ what is still open.
 | Firstmate source | `kunchenguid/firstmate` pinned at a commit, `devenv bump firstmate` | the owner's fork `digigrant/firstmate`, **not pinned**, updated automatically (see below) | Owner's decision (replaces D15). |
 | Firstmate updates | manual (`/updatefirstmate`, then `devenv bump`) | whenever `devenv entry` starts a first mate: fast-forward the fork from upstream with GitHub's Sync fork (only when strictly behind), then Firstmate's own `bin/fm-update.sh`. `FIRSTMATE_AUTO_UPDATE=off` pauses both | Owner's decision: automatic fast-forward, no review. Upstream ships ~100 commits a week. |
 | Memory location (§6.11) | symlinks, or a setting if one exists | symlinks (`devenv start` and a `SessionStart` hook) | Claude's `autoMemoryDirectory` is one fixed folder for all projects. |
+| Layout (D2, D6, §4) | `~/devenv` beside the workspace `~/dev`; `workspace: ../dev`; devenv mounted read-only as an additional workspace | Docker's environment-file layout: `sbxenv.yaml` beside `workspace: ./dev`, a gitignored folder inside the checkout that `host-prepare` creates; the checkout itself is never mounted | Owner's decision, session 2. Docker's docs keep the environment file outside every mounted folder, and the read-only mount contained it. `doctor`/`host-prepare` allow only the checkout's own `dev/` as a workspace. New host rules: don't `cd` into `dev/` with a git-aware prompt or open it in an editor; never `git clean -x` in the checkout. |
+| devenv inside the sandbox (§6.3, V7) | the read-only mount of the host checkout | a writable clone at `~/fm-projects/devenv`, made by the kit's install step (kit args `repo`, `ref`; default `main`; `sbx env run --kit-arg ref=<branch>` to test a branch). It is also Firstmate's project clone of devenv | Owner: one writable copy that the sandbox runs from and agents change (in worktrees, by PR). Firstmate's fleet sync fast-forwards it while it is a clean `main`. The host still runs only `~/devenv`. |
+| Skills (D21, V4) | sbx's shared store, filled by `host-prepare` | linked into `~/.claude/skills` from the clone by `devenv start` and `provision.sh`; `sandboxOptions.skills: "off"`; the store sync (`skills-sync`, `DEVENV_SKILLS`) is gone | sbx mounts the store only for "a supported agent" (its built-ins); `dev` runs the custom kit `devenv`, so its first mate saw no skills. `claude-dev` (built-in `claude`) has the store with both skills. Following Docker's example fully (`agent: claude` + a mixin) would fix the store but a mixin can't set the entrypoint; the owner chose landing in herdr plus links (option C). v3 kits can declare the skills path (`agent-skills@1`), but the built-in claude is v2. |
+| Projects (D1, `repos.txt`) | optional `repos.txt` cloned into the workspace | removed. A new sandbox clones nothing but devenv; the owner tells the first mate project names and URLs once, and Firstmate clones on demand into `~/fm-projects` | Owner, session 2. Firstmate's registry holds no URLs and drops entries whose clone is gone, so the names and URLs live in what the first mate remembers (its home persists). |
+| Fallbacks removed | V5 `devenv up`, V7 `DEVENV_STAGE_PAYLOAD` | gone | Obsolete with the new layout. |
+| Agents off `main` | owner sets branch rules by hand (D9) | `digigrant/devenv` has an active ruleset (PR with one approval, no force-push or deletion). Not enforced for the fork `digigrant/firstmate`: its ruleset stays disabled so the in-sandbox sync (as gej-machine) works | Owner, session 2: the owner has no `gh` login on the host and doesn't want one; not worth it for the fork. |
+| Setup-token expiry | owner fills in `ANTHROPIC_TOKEN_EXPIRES` | left empty | Owner, session 2: tokens will move to a secrets manager soon. |
 
 ## Verification status
 
+The host results below are from the first layout; HOST-VERIFY has to be
+re-run with the new one.
+
 | Item | Status |
 |---|---|
-| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself: HOST-VERIFY V1, including "still signed in after a second `sbx env run`" (the placeholder must stay stable). |
+| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself, including "still signed in after a second `sbx env run`" (the placeholder must stay stable). |
 | V2 | Plan accepted `agent: devenv`; `extends: claude` resolved (claude template image, inherited credential). Detach/re-attach and herdr-server survival still to check on the host. In the sandbox, a second `devenv entry` re-attached with one `firstmate` workspace (AC3). |
 | V3, V8, V9 | Done in the sandbox (see decisions). |
-| V4 | Host-prepare reported `skills in the sbx store (import): grill-me grilling`, but see **issue 1** below. |
-| V5 | Relative paths resolved in the plan; the install step saw the read-only mount. Mount details (rw workspace, ro devenv) still to check. |
+| V4 | Changed: skills are linked (see decisions). The sbx simulation checks the links; the host check is HOST-VERIFY V4 and AC7. |
+| V5 | Relative paths resolved in the plan (first layout). The new layout's single mount is HOST-VERIFY V5. |
 | V6, V10, V11, V12 | Host checks pending. In the sandbox: memory written by Claude lands in the state folder through the symlink; Firstmate's detect-only bootstrap reports nothing missing except the optional `PRESENTATION_UNAVAILABLE: lavish-axi`. |
-| V7 | **Passed on the host.** |
-| AC5, AC8, AC9, AC12, AC13–AC16 | Checked in the sandbox (AC13 on a simulated host). |
+| V7 | Replaced by the clone at create (HOST-VERIFY V7). The first layout's check passed on the host. |
+| AC5, AC8, AC9, AC12, AC13–AC16 | Checked in the sandbox (AC13 on a simulated host, including the new "workspace inside the checkout" case). |
 
 ## Open work
 
-### 1. Firstmate doesn't see `/grill-me` or `/grilling` (reported by the owner)
+### 1. Host verification of the new layout (owner)
 
-Not investigated yet. What is known:
+HOST-VERIFY from step 0: `sbx env rm` the old `dev`, pull, then
+`sbx env run --kit-arg ref=initial-setup`. Apply fixes per the owner's reports
+and push them to PR #1. Things only the host can show:
 
-- Delivery is `DEVENV_SKILLS=store`: `devenv host-prepare` runs
-  `sbx skills import` with a staging `HOME`, and sbx should mount its shared
-  store read-only at `~/.claude/skills` in the sandbox. Host-prepare reported
-  success.
-- Likely cause, unconfirmed: Docker's docs say the store is mounted for
-  sandboxes "created for a supported agent". Our agent is the third-party kit
-  `devenv` (extends `claude`), which may not qualify. The 0.45 release notes
-  mention that *v3* kits can declare where an agent reads shared skills,
-  which suggests v2 third-party kits may not get the mount.
-- Other candidates: the import landed in a different store (the staging
-  `HOME` trick), or `~/.claude/skills` is mounted but empty.
-- The owner's old project-level copies in `~/dev/.claude/skills` are only
-  seen by sessions whose project root is `~/dev`. `~/dev/firstmate` is its
-  own git root, so the first mate doesn't see them.
-- First checks: in the sandbox, `mount | grep -i skill` and
-  `ls -la ~/.claude/skills`; on the host, `sbx skills ls`.
-- The documented fallback (V4) is `sandboxOptions.skills: off` in
-  `sbxenv.yaml` plus `DEVENV_SKILLS=link` in `devenv.conf`. `devenv start`
-  then symlinks `~/.claude/skills/<name>` to `$DEVENV_DIR/skills/<name>`,
-  which is code that already exists. This needs a recreate. In session 1,
-  symlinked skills were listed by Claude (tested in a scratch `HOME`).
-  `grill-me` has `disable-model-invocation: true`: it appears as a slash
-  command but is never auto-invoked.
-- Acceptance (AC7): both skills listed in a session in `~/dev/firstmate` and
-  in a treehouse worktree.
+- whether a later `sbx env run` without `--kit-arg` complains or wants a
+  recreate (kit arguments apply at create);
+- what sbx puts next to the workspace inside the sandbox
+  (`/home/<you>/devenv`: the read-only `sbxenv.yaml`, sbx's `CLAUDE.md`);
+- the kit's clone and provisioning in a real create (V7), and the skill links
+  in the first mate and a worktree (V4, AC7);
+- Firstmate registering the existing `~/fm-projects/devenv` clone when told
+  about the project, rather than cloning it again.
 
-### 2. Let Firstmate work in the devenv repo (owner's request)
+### 2. Firstmate projects
 
-The owner wants Firstmate (the first mate and its workers) to be able to change
-devenv: branches, commits, pushes, PRs. Today the only copy in the sandbox is
-the read-only mount of the owner's host checkout.
+Nothing to build. The owner tells the first mate about each project once (name,
+URL, delivery mode; devenv: direct-PR). Firstmate's home survives rebuilds;
+project clones don't, and it re-clones when a task needs one.
 
-**Do not make that mount writable.** The owner's host runs code from
-`~/devenv` on every `sbx env run`: the `lifecycle.initialize` hook
-(`bin/devenv host-prepare`), the secret `command:`s, and the kit's install
-step. A writable mount would let the sandbox change code that runs on the host
-with the owner's privileges. That breaks security invariants 2 and 3 (SPEC
-§10) and D3 (changes arrive only by PR, then the owner pulls).
-`doctor`/`host-prepare` also refuse a checkout that overlaps a sandbox
-workspace.
+### 3. Smaller items
 
-Recommended approach, consistent with D3 and how Firstmate already works:
-
-- Register `digigrant/devenv` as a Firstmate **project**. Firstmate clones
-  projects under `$FM_PROJECTS_OVERRIDE` (`~/fm-projects`, sandbox disk) and
-  its workers use treehouse worktrees; delivery mode `direct-PR`.
-  gej-machine already has write access (it pushed PR #1). Check Firstmate's
-  own docs and `AGENTS.md` for the exact project-registration flow;
-  `data/projects.md` holds the registry.
-- The owner merges, then `git -C ~/devenv pull` on the host. Nothing changes
-  on the host side.
-- Optionally add a devenv `CLAUDE.md` or `AGENTS.md` for workers: the rules
-  above, `devenv test` as the check, the pinned shellcheck image. And
-  consider whether `repos.txt` should list it (that clones into `~/dev`,
-  which the owner's host can see, so `~/fm-projects` is probably better).
-- Confirm the plan with the owner before building. They said the next
-  session would "adjust that", and may have the mount itself in mind.
-
-### 3. Keep agents off `main` while syncing automatically (design agreed in part, not built)
-
-The owner wants agents never to push to `main`, only branches and PRs. They
-disabled the fork's ruleset because it blocked the automated sync: Sync fork
-counts as a direct update to `main`, so it was refused with HTTP 422. GitHub
-bypass lists work by role, not action, so gej-machine can't be allowed to sync
-without also being allowed to push.
-
-Proposed option, not built: re-enable a ruleset requiring PRs on the fork's
-`main`, with **Repository admin** on its bypass list. Then move the sync from
-`devenv entry` (sandbox, gej-machine) to `devenv host-prepare` (host, the
-owner's own `gh` login), so only the owner's credential can fast-forward
-`main`. It needs `gh` on the host, logged in as `digigrant`. The same kind of
-ruleset (no bypass needed) would suit `digigrant/devenv`; whether it has one
-wasn't checked. Get the owner's go-ahead first.
-
-Related: a sync whose upstream commits change `.github/workflows/` needs the
-`workflow` scope on whichever token syncs. gej-machine's token has only
-`repo`, so such syncs currently stall with a `devenv check` warning. Granting
-`workflow` to gej-machine also lets agents run workflows, with the repos'
-Actions secrets, from any branch they push. That trade-off was explained to
-the owner, who hasn't decided.
-
-### 4. Host verification (owner)
-
-Continue HOST-VERIFY from step 5 with the current branch. After pulling: if
-`~/dev/firstmate` was cloned from `kunchenguid` earlier, run (in the sandbox)
-`git -C "$FM_HOME" remote set-url origin https://github.com/digigrant/firstmate`;
-`devenv check` warns until it's done. Apply fallbacks per the owner's
-reports, and push fixes to PR #1.
-
-### 5. Smaller items
-
-- The setup-token's expiry date, for `ANTHROPIC_TOKEN_EXPIRES` in
-  `devenv.conf`; ask the owner. The new GitHub token expires
-  2026-12-24 21:55 UTC and is tracked automatically through the API.
-- The fork sync's fast-forward path hasn't run for real yet (the fork was
-  already current). The next first-mate start with upstream ahead will
-  exercise it: look for `firstmate sync: fast-forwarded …` in
-  `devenv check`.
-- Phase 5, after merge (owner): `sbx rm claude-dev`, then, with confirmation,
-  remove `/home/gejoy/dev/.claude/settings.json` (project-level statusLine),
-  `statusline-command.sh` and `skills/`.
+- The fork sync's fast-forward path hasn't run for real yet. The fork was 6
+  commits behind upstream in session 2 (none touch workflows), so the next
+  first-mate start will exercise it: look for
+  `firstmate sync: fast-forwarded …` in `devenv check`.
+- A sync whose upstream commits change `.github/workflows/` stalls with a
+  `devenv check` warning: gej-machine's token has only `repo`. The owner then
+  clicks Sync fork on GitHub (or grants `workflow`, which also lets agents run
+  workflows from branches they push; undecided).
+- Phase 5, after merge (owner): drop `--kit-arg ref=initial-setup`,
+  `sbx rm claude-dev`, then, with confirmation, remove the first layout's and
+  the old sandbox's leftovers in `/home/gejoy/dev`: `firstmate/`,
+  `.devenv-state/`, and `.claude/settings.json` (project-level statusLine),
+  `.claude/statusline-command.sh`, `.claude/skills/`.
 - herdr switches to "working" about 3 s after a turn starts. That looks like
   herdr's own debounce; informational.
 - Newer upstream versions exist but aren't adopted: herdr 0.9.1 (Firstmate
   has verified ≤ 0.8.0) and treehouse 3.0.0 (major bump). `devenv bump --list`
   shows them.
 
-## Facts and traps learned in session 1
+## Facts and traps learned
 
 **sbx (0.45.1)**
 - A failed create only says `failed to apply kit to sandbox`. The real
@@ -218,6 +166,16 @@ reports, and push fixes to PR #1.
   Command sources run from a temp directory on the host, so they need
   absolute paths. The devenv placeholder lives in
   `~/.config/devenv/claude-oauth-placeholder` on the host.
+- The shared skills store is mounted only for sbx's built-in agents ("a
+  supported agent"; `content/manuals/ai/sandboxes/workflows/agent-skills.md`),
+  at `/home/agent/.claude/skills`, never into a workspace. v2 kits can't
+  declare a skills path; v3 kits can (`agent-skills@1`), but the built-in
+  agents are v2 and v2 and v3 kits don't mix.
+- In `sbxenv.yaml`, quote `skills: "off"`: a bare `off` is a YAML 1.1 boolean.
+- Kit arguments: `${{ kit.args.X }}` is substituted in `spec.yaml` before YAML
+  decoding; pass values with `--kit-arg X=…` (`sbx env plan|run|create`).
+- `sbx env run -d` creates/starts without attaching; `sbx env exec -it -- …`
+  runs an interactive command in the environment's sandbox.
 - Docs source: `docker/docs` on GitHub, `content/manuals/ai/sandboxes/` and
   CLI reference YAML in `data/sbx_cli/`. The v2 kit validator is Go code in
   `docker/sbx-kits-contrib/spec` (`LoadFromDirectory` + `ValidateArtifact`);
@@ -243,7 +201,19 @@ reports, and push fixes to PR #1.
 - A pane attached under `script` with no terminal size shrinks to 2 rows. Use
   `script -qfec "stty rows 40 cols 120; devenv entry" /dev/null`.
 
+**git**
+- git refuses a repository owned by another user ("dubious ownership"). The
+  kit's install step runs as root on the agent's clone, so it passes
+  `-c safe.directory=<dir>`; `tar` into a root-run test needs
+  `--no-same-owner`.
+
 **Firstmate**
+- `bin/fm-fleet-sync.sh` fast-forwards a project clone's default branch when
+  it is clean and on it, and reports any other state as `STUCK` without
+  touching it. The project registry (`data/projects.md`) has no URLs, and a
+  stale entry (no clone) is dropped.
+- A first mate running outside herdr is supported with the herdr backend (its
+  workers get the home's own herdr workspace); devenv doesn't use that.
 - Workers inherit the environment unless the opt-in
   `config/launch-env-allowlist` or `config/claude-account` exists (devenv
   creates neither).
@@ -260,8 +230,8 @@ reports, and push fixes to PR #1.
 
 ## Working on this repo
 
-- Clone to the sandbox disk (e.g. `~/src/devenv`), never under `~/dev`. Set
-  the bot identity locally: `git config user.name gej-machine` and
+- Clone to the sandbox disk (e.g. `~/src/devenv`), never under a workspace.
+  Set the bot identity locally: `git config user.name gej-machine` and
   `user.email 318032932+gej-machine@users.noreply.github.com`.
 - `./bin/devenv test` runs everything (~10 min; Docker in the sandbox; test
   containers use `--network host` and the proxy CA).
@@ -270,7 +240,9 @@ reports, and push fixes to PR #1.
 - To exercise sbx-mode provisioning in `claude-dev` without touching live
   files, point `HOME`, `WORKSPACE_DIR`, `DEVENV_ENV_FILE`,
   `DEVENV_SYSTEM_PREFIX` and `NPM_CONFIG_PREFIX` at scratch paths.
-- To exercise host commands, use a scratch `HOME` and a fake `sbx` on `PATH`
-  that logs its arguments. `DEVENV_EXTRA_WORKSPACES` simulates overlapping
-  workspaces for the checkout-location check.
+- To exercise host commands, use a scratch `HOME` with a copy of the checkout
+  at `$HOME/devenv`, a fake `sbx` on `PATH` that logs its arguments, and
+  `env -u IS_SANDBOX -u SANDBOX_NAME -u WORKSPACE_DIR` (otherwise they detect
+  the sandbox). `DEVENV_EXTRA_WORKSPACES` simulates overlapping workspaces for
+  the checkout-location check.
 - Keep the PR description, README and HOST-VERIFY in step with the code.

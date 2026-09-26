@@ -7,8 +7,9 @@
 #      --plain in a throwaway container, versions, a clean second run, and
 #      `devenv check` exiting 0.
 #   4. tests/sbx-sim.sh: the kit's own install and startup snippets in a
-#      container laid out like a Docker Sandbox (root-to-agent handoff,
-#      ownership, a clean re-run). Part of --no-containers.
+#      container laid out like a Docker Sandbox (the devenv clone, the
+#      root-to-agent handoff, ownership, skill links, a clean re-run).
+# --no-containers runs only 1 and 2.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 

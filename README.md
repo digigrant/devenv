@@ -13,13 +13,45 @@ same tools on a plain Debian/Ubuntu machine without `sbx`.
 cd ~/devenv && sbx env run
 ```
 
-The design and every decision behind it are in [docs/SPEC.md](docs/SPEC.md).
-The host-side verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.md).
+The design and every decision behind it are in [docs/SPEC.md](docs/SPEC.md);
+decisions made since are in [docs/HANDOFF.md](docs/HANDOFF.md). The host-side
+verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.md).
+
+## Layout
+
+devenv follows Docker's layout for
+[environment files](https://docs.docker.com/ai/sandboxes/configuration/environment-files/):
+`sbxenv.yaml` sits beside the workspace, and the folder that holds it is never
+mounted into the sandbox.
+
+```
+host                                  sandbox "dev"
+~/devenv/          this repo          (not mounted)
+├── sbxenv.yaml
+├── kits/devenv/   the sandbox kit
+└── dev/           the workspace ───► ~/devenv/dev, read-write
+    ├── firstmate/       Firstmate's home
+    └── .devenv-state/   Claude memory
+                                      ~/fm-projects/devenv   devenv, cloned at create
+```
+
+- **`dev/`** is the only folder the sandbox shares with the host. It holds what
+  survives a rebuild. It is gitignored and belongs to the sandbox (see
+  [Operating rules](#operating-rules)).
+- **Inside the sandbox, devenv is a writable clone** of this repo at
+  `~/fm-projects/devenv`, made by the kit when the sandbox is created (branch
+  `main`, or the `ref` kit argument). The sandbox runs devenv from that clone
+  (`$DEVENV_DIR`: status line, `devenv start`, `devenv entry`), and it is also
+  Firstmate's project clone of devenv, so agents can change devenv and open
+  PRs. Firstmate keeps it fast-forwarded to `main` while it is clean.
+- The host runs devenv only from `~/devenv` (`devenv host-prepare`, the secret
+  commands, `devenv doctor`), so nothing the sandbox does changes code that
+  runs on the host.
 
 ## Quick start (host)
 
 1. Meet the [host prerequisites](#host-prerequisites).
-2. Clone devenv **next to** the workspace, never inside it:
+2. Clone devenv (outside every sandbox workspace, e.g. not inside `~/dev`):
    ```sh
    git clone https://github.com/digigrant/devenv ~/devenv
    ```
@@ -35,13 +67,18 @@ The host-side verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.m
 5. Build and enter the sandbox: `cd ~/devenv && sbx env run`
 
 You land in herdr, in a workspace named `firstmate`, where the first mate
-(Claude at `xhigh` effort) runs in `~/dev/firstmate`. No `/login` is needed:
-see [Claude sign-in](#claude-sign-in). Detach with `ctrl+b q`;
+(Claude at `xhigh` effort) runs in `~/devenv/dev/firstmate`. No `/login` is
+needed: see [Claude sign-in](#claude-sign-in). Detach with `ctrl+b q`;
 panes keep running. Run `sbx env run` again to re-attach.
 
 `sbx env run` shows a plan and asks for approval (`-y` skips the prompt). With
 no path argument it also merges `~/.sbxenv.yaml` if you have one; use
 `sbx env run .` to skip that file.
+
+To build the sandbox from a devenv branch instead of `main` (for example to
+try a PR before merging it), pass the kit argument when the sandbox is
+created: `sbx env run --kit-arg ref=<branch>`. Check out the same branch in
+`~/devenv`, since the host side runs from there.
 
 ## Host prerequisites
 
@@ -65,17 +102,23 @@ and native Linux behave the same.
 
 ## Operating rules
 
-- **Treat `~/dev` as belonging to the sandbox.** Never run `git`, scripts or
-  build tools in it from the host: agents can plant git hooks or scripts
-  there. (`devenv doctor` prints this rule.)
+- **Treat `~/devenv/dev` as belonging to the sandbox.** Never run `git`,
+  scripts or build tools in it from the host, don't `cd` into it with a
+  git-aware shell prompt, and don't open it in an editor: agents can plant git
+  hooks, git config or scripts there, and prompts and editors run `git` in the
+  repositories they find. (`devenv doctor` prints this rule.)
+- **Never run `git clean -x` (or `-X`) in `~/devenv`**: `dev/` is gitignored,
+  so it would delete the workspace, including Firstmate's home and Claude's
+  memory. `git clean` without `-x` leaves it alone.
 - **devenv changes arrive only by PR.** Agents (as `gej-machine`) change
-  devenv in their own clone and open a PR; the owner merges, then runs
-  `git -C ~/devenv pull`. Everything that runs on the host (the lifecycle
-  hook, the secret commands, `bin/devenv` host commands, kit network rules)
-  therefore comes only from reviewed code.
-- The `~/devenv` checkout must never be inside a folder the sandbox can
-  write. Inside the sandbox it is mounted read-only. `devenv doctor` and
-  `devenv host-prepare` refuse to continue otherwise.
+  devenv in a worktree of the sandbox's clone and open a PR; the owner merges,
+  then runs `git -C ~/devenv pull`. Everything that runs on the host (the
+  lifecycle hook, the secret commands, `bin/devenv` host commands, kit network
+  rules) therefore comes only from reviewed code.
+- Only the checkout's own `dev/` may be a sandbox workspace: the checkout must
+  never be inside a folder a sandbox can write, and no other workspace may be
+  inside it. `devenv doctor` and `devenv host-prepare` refuse to continue
+  otherwise.
 - Secrets never go in the repo. The `github` secret is the `gej-machine`
   token only, never a personal token.
 - Never allow `herdr.dev`: herdr is pinned, and its update and manifest
@@ -115,7 +158,7 @@ takes a recreate.
 | Value | Opens |
 |---|---|
 | `herdr` (default) | herdr with the `firstmate` workspace, creating it (and starting the first mate) only if it doesn't exist |
-| `claude` | plain Claude in `~/dev` |
+| `claude` | plain Claude in the workspace (`~/devenv/dev`) |
 | `shell` | a login shell |
 
 Edit it and run `sbx env run` again; no recreate is needed.
@@ -124,13 +167,36 @@ Edit it and run `sbx env run` again; no recreate is needed.
 
 | Thing | Where | Survives `sbx rm`? |
 |---|---|---|
-| devenv | host `~/devenv` (read-only in the sandbox) | yes |
+| devenv (host) | `~/devenv`, never mounted | yes |
+| devenv (sandbox) | `~/fm-projects/devenv`, cloned at create | no: cloned again at the next create |
 | Secrets | host `~/.config/devenv/secrets/` (0600) | yes |
-| Firstmate home (clone, `config/`, `data/`, `state/`) | `~/dev/firstmate` | yes |
-| Claude memory | `~/dev/.devenv-state/claude-memory/<project>/`, linked from `~/.claude/projects/<project>/memory` | yes |
+| Firstmate home (clone, `config/`, `data/`, `state/`) | `~/devenv/dev/firstmate` | yes |
+| Claude memory | `~/devenv/dev/.devenv-state/claude-memory/<project>/`, linked from `~/.claude/projects/<project>/memory` | yes |
 | Firstmate project clones | `~/fm-projects` (sandbox disk) | no: push your work |
 | treehouse worktrees | `~/.treehouse` (sandbox disk) | no |
 | herdr sessions, Claude transcripts | sandbox | no |
+
+## Projects
+
+A new sandbox clones no projects apart from devenv itself. Tell the first mate
+about the projects you work on, once, with their GitHub URLs and how changes
+should ship (for example: *"devenv is https://github.com/digigrant/devenv,
+direct-PR"*). Firstmate keeps that in its home, which survives rebuilds, and
+clones a project into `~/fm-projects` when a task needs it. Its workers work
+in treehouse worktrees on branches and deliver by PR; merges wait for your
+word.
+
+devenv is already cloned at `~/fm-projects/devenv`, so Firstmate picks it up
+as a project; tell it the delivery mode the first time.
+
+## Skills
+
+devenv's skills (`skills/`: `grill-me`, `grilling`) are linked into
+`~/.claude/skills` from the devenv clone by `devenv start`, so every Claude
+session sees them: the first mate, and workers in `~/.treehouse` worktrees.
+sbx's shared skills store is off for this sandbox (`sandboxOptions.skills`):
+sbx mounts it only for its built-in agents, not for a custom kit like
+devenv's.
 
 ## Commands
 
@@ -138,25 +204,25 @@ Edit it and run `sbx env run` again; no recreate is needed.
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, secret files, checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings. |
-| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, secret files, checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
+| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
 | `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
 | `devenv test` | sandbox or any Docker host | Status line byte-identity, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), and a simulated sbx create that runs the kit's own install and startup steps. |
-| `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, memory links, warnings. |
+| `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
-| `devenv host-prepare` | host | The `lifecycle.initialize` hook: checks secrets and the checkout location, syncs skills into sbx's store. |
-| `devenv skills-sync` | host | Put `skills/` into sbx's shared skills store; removes skills deleted from the repo. |
-| `devenv up` | host | Fallback only (V5): render `sbxenv.yaml` with absolute paths and run it. |
+| `devenv host-prepare` | host | The `lifecycle.initialize` hook: checks secrets and the checkout location, creates `dev/`, sets up the Claude sign-in. |
 
 ### Updating versions
 
 Pins live in `versions.env`, one tool per block, with a sha256 for every
-download. To move one, work in your own clone and open a PR:
+download. To move one, bump it on a branch and open a PR. In the sandbox, use
+a worktree of the devenv clone rather than the clone itself, which the sandbox
+runs from:
 
 ```sh
-git clone https://github.com/digigrant/devenv ~/src/devenv
-devenv bump --repo ~/src/devenv --list
-devenv bump --repo ~/src/devenv herdr 0.9.1      # warns loudly: Firstmate has not verified 0.9.1
+git -C ~/fm-projects/devenv worktree add ~/devenv-bump -b bump-herdr
+devenv bump --repo ~/devenv-bump --list
+devenv bump --repo ~/devenv-bump herdr 0.9.1   # warns loudly: Firstmate has not verified 0.9.1
 ```
 
 Claude Code and Firstmate are not pinned: Claude Code updates itself, and
@@ -174,7 +240,7 @@ Firstmate comes from the owner's fork, `digigrant/firstmate`
    Sync fork fast-forwards it, as gej-machine. If the fork has commits of its
    own, the sync stops and `devenv check` warns; it never merges.
 2. **Local update.** Firstmate's own `bin/fm-update.sh` fast-forwards
-   `~/dev/firstmate` (and any secondmates) to the fork's `main`. A dirty or
+   `~/devenv/dev/firstmate` (and any secondmates) to the fork's `main`. A dirty or
    diverged clone is skipped, and `devenv check` warns.
 
 Both results print at entry and show as notes in `devenv check`; a failure
@@ -206,17 +272,18 @@ Claude Code with its official installer if missing (the one documented
 exception to checksum pinning), clones Firstmate to `~/dev/firstmate`, links
 the skills into `~/.claude/skills`, and writes `~/.config/devenv/env.sh`,
 sourced from `~/.bashrc`. Git identity is left alone unless you pass
-`--git-identity bot`.
+`--git-identity bot`. In plain mode devenv runs from the checkout itself, and
+the workspace is `~/dev` (`PLAIN_WORKSPACE_DIR`).
 
 ## Layout
 
 ```
-sbxenv.yaml            sbx layer: kit, workspaces, env, secrets, lifecycle
-kits/devenv/           v2 sandbox kit (extends claude; entrypoint devenv-entry)
+sbxenv.yaml            sbx layer: kit, workspace, env, secrets, lifecycle
+kits/devenv/           v2 sandbox kit (extends claude; clones devenv; entrypoint devenv-entry)
+dev/                   the sandbox workspace (gitignored; created by host-prepare)
 provision.sh           portable installer: --sbx | --plain
 devenv.conf            non-secret settings
 versions.env           every pin and sha256
-repos.txt              optional repos to clone into the workspace
 bin/                   devenv CLI and the entrypoint shim
 lib/                   shared shell code; lib/cmd/ has one file per subcommand
 agents/claude/         everything Claude-specific (status line, overlay, CLAUDE.md, hooks)
@@ -253,21 +320,27 @@ when herdr is bumped past the version it was tested with.
 - **The sandbox opens Claude instead of herdr.** The kit's entrypoint wasn't
   used (V2). Run `devenv entry` by hand, or use the mixin fallback described in
   `kits/devenv/spec.yaml`.
-- **Skills are missing.** Check `sbx skills ls` on the host. Fallback: set
-  `sandboxOptions.skills: off` in `sbxenv.yaml` and `DEVENV_SKILLS=link` in
-  `devenv.conf`, then recreate.
+- **Skills are missing.** Run `devenv doctor` in the sandbox: its "Claude
+  settings" part names any skill that isn't linked. `devenv start` links them
+  from `$DEVENV_DIR/skills`; start a new Claude session afterwards.
+- **The create fails with `failed to apply kit to sandbox`.** The kit's
+  install step (the devenv clone, then `provision.sh`) failed; the reason is
+  in sbx's daemon log (see docs/HOST-VERIFY.md, step 5). A `--kit-arg ref=`
+  that names no branch on GitHub is one cause. Clean up with `sbx env rm`
+  before retrying.
 - **A download is blocked (HTTP 403).** Add only that host to
   `permissions.network.allow` in `kits/devenv/spec.yaml` (by PR), then
   recreate. Never `herdr.dev`.
-- **`setup.install` can't find the devenv checkout (V7).** Set
-  `DEVENV_STAGE_PAYLOAD=on`; `host-prepare` then copies what provisioning
-  needs into the kit.
 - **Effort isn't `high` in new sessions.** The default is written per model
   (`CLAUDE_EFFORT_MODELS` in `devenv.conf`), because Claude Code ignores a
   model-independent effort in user settings. Add the new model's id there when
   the default model changes; `devenv doctor` flags a mismatch.
 - **herdr shows agents as idle while they work.** Check
   `devenv doctor` → "herdr Claude detection". It should say `local override`.
+- **`devenv check` warns that the devenv clone has uncommitted changes.** The
+  sandbox runs from `~/fm-projects/devenv`, so changes there take effect at
+  once. Move them to a branch (`git -C ~/fm-projects/devenv stash`, then work
+  in a worktree) or discard them.
 - Logs: `~/.cache/devenv/start.log`, `/var/log/sbx-kit-startup.log`,
   `~/.cache/devenv/herdr-server.log`.
 
