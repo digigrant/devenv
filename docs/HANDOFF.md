@@ -47,7 +47,7 @@ spec, what is verified, and what is still open.
   | `67d285d` | Firstmate from the owner's fork `digigrant/firstmate` |
   | `bca4ee5` | automatic Firstmate updates at every first-mate start; the Firstmate pin removed |
   | `ec8f3b3` | this handoff |
-  | session 2 | Docker's layout: workspace `./dev` in the checkout, no devenv mount, devenv cloned into the sandbox at create, skills linked |
+  | `2fd9ec6` | Docker's layout: workspace `./dev` in the checkout, no devenv mount, devenv cloned into the sandbox at create, skills linked |
 
 - **Tests:** `devenv test` passes after the restructure: status line
   byte-identity, shellcheck, `provision.sh --plain` twice in `ubuntu:24.04`
