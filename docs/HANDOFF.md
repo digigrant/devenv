@@ -2,10 +2,13 @@
 
 Written 2026-09-26 at the end of the first implementation session; updated
 the same day in session 2, which restructured the sbx layer to Docker's
-layout. Read this, then [SPEC.md](SPEC.md) (the approved design),
-[README.md](../README.md) and [HOST-VERIFY.md](HOST-VERIFY.md). This file
-records what the code alone doesn't: decisions made with the owner after the
-spec, what is verified, and what is still open.
+layout. Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
+[HOST-VERIFY.md](HOST-VERIFY.md).
+
+**SPEC.md is current:** session 2 revised it to the design as built, including
+every decision below. This file records what the spec doesn't: why things
+changed from the originally approved spec (commit `3cd88ee`), what is
+verified, what is still open, and traps learned along the way.
 
 ## Working rules (from the owner and the spec)
 
@@ -61,7 +64,10 @@ spec, what is verified, and what is still open.
   had its `origin` set to `digigrant/firstmate` in session 2. The new layout
   doesn't use it.
 
-## Decisions made after the spec
+## Decisions made after the original spec
+
+All of these are now in SPEC.md; the "Spec said" column is the original.
+
 
 | Topic | Spec said | Now | Why |
 |---|---|---|---|

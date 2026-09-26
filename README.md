@@ -14,8 +14,9 @@ cd ~/devenv && sbx env run
 ```
 
 The design and every decision behind it are in [docs/SPEC.md](docs/SPEC.md);
-decisions made since are in [docs/HANDOFF.md](docs/HANDOFF.md). The host-side
-verification checklist is [docs/HOST-VERIFY.md](docs/HOST-VERIFY.md).
+status, open work, and why things changed from the original spec are in
+[docs/HANDOFF.md](docs/HANDOFF.md). The host-side verification checklist is
+[docs/HOST-VERIFY.md](docs/HOST-VERIFY.md).
 
 ## Layout
 
@@ -346,11 +347,15 @@ when herdr is bumped past the version it was tested with.
 
 ## Roadmap (not built yet)
 
+- A secrets manager for the setup-token and the GitHub token: swap the
+  `command:` lines in `sbxenv.yaml` for `ref: op://…` (and `host-prepare`'s
+  custom-secret command).
 - A GitHub permission system for agents: rulesets or a bot bypass list, or a
   GitHub App with short-lived tokens through `secrets.github.command` plus
   `refresh`.
-- A secrets manager: swap the `command:` lines in `sbxenv.yaml` for
-  `ref: op://…`.
 - Worker effort and model profiles in Firstmate's `config/crew-dispatch.json`.
 - A second worker harness (e.g. Codex): `config/crew-harness` plus its install.
 - Bumping herdr past 0.8.0 once Firstmate verifies newer versions.
+- v3 kits, once a v3 Claude workload is available to build on: a v3 kit can
+  declare where Claude reads skills, so sbx's shared store could replace the
+  links.
