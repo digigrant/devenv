@@ -1,0 +1,10 @@
+{
+  "model": {
+    "id": "claude-sonnet-5",
+    "display_name": "Sonnet 5"
+  },
+  "context_window": {
+    "total_input_tokens": 999,
+    "total_output_tokens": 0
+  }
+}

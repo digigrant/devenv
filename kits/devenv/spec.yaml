@@ -1,0 +1,88 @@
+# devenv sandbox kit (Kit v2). Forks the built-in `claude` agent: it inherits
+# the claude image, credentials, network rules, volumes and setup, and replaces
+# only the entrypoint, so the sandbox opens herdr with the first mate.
+#
+# At create it clones devenv (the `repo` and `ref` arguments) into
+# ~/fm-projects/devenv, a writable clone on the sandbox's own disk, and
+# provisions from it. That clone is what the sandbox runs (status line,
+# `devenv start`, `devenv entry`) and also Firstmate's project clone for work
+# on devenv itself. The host checkout is never mounted.
+#
+#   sbx env run --kit-arg ref=<branch>     create the sandbox from a branch
+#
+# If `extends: claude` with a replaced entrypoint stops working on your sbx,
+# the fallback is to use this directory as a mixin: change `kind` to `mixin`,
+# delete `extends` and the `sandbox` block, add `requires: {agent: claude}`,
+# and in sbxenv.yaml set `agent: claude` with `kits: [./kits/devenv]`. Then
+# start the environment with `devenv entry` by hand.
+schemaVersion: "2"
+kind: sandbox
+name: devenv
+displayName: devenv (Firstmate on herdr, with Claude Code)
+description: >-
+  Claude Code sandbox that runs Firstmate on the herdr backend. Clones devenv,
+  installs the pinned tools with its provision.sh and opens herdr with a
+  first-mate pane (DEVENV_ENTRY=herdr|claude|shell).
+extends: claude
+
+args:
+  repo:
+    default: https://github.com/digigrant/devenv
+    description: devenv repository to clone into the sandbox
+    pattern: '^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+  ref:
+    default: main
+    description: Branch or tag of devenv to clone (e.g. a PR branch to test)
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+
+sandbox:
+  # Installed by provision.sh at create time; hands over to `devenv entry`.
+  entrypoint: [devenv-entry]
+
+# Network: the host keeps the `balanced` baseline policy. Extra domains go
+# here, scoped to this sandbox, only once V11 shows the baseline blocks them.
+# Never add herdr.dev.
+# permissions:
+#   network:
+#     allow:
+#       - example.com
+
+setup:
+  install:
+    # Runs as root once, at create, before the terminal attaches. Clones
+    # devenv for the agent user (uid 1000), then provision.sh does the system
+    # steps as root and the rest as the agent user. An existing clone is left
+    # as it is.
+    - description: Clone devenv and provision (provision.sh --sbx)
+      user: "0"
+      command: |
+        set -e
+        home=$(getent passwd 1000 | cut -d: -f6)
+        dir="$home/fm-projects/devenv"
+        repo='${{ kit.args.repo }}'
+        ref='${{ kit.args.ref }}'
+        if [ -d "$dir/.git" ]; then
+          echo "devenv: using the existing clone in $dir"
+        else
+          echo "devenv: cloning $repo ($ref) into $dir"
+          install -d -o 1000 -g 1000 "$home/fm-projects"
+          GIT_TERMINAL_PROMPT=0 git clone --quiet --branch "$ref" "$repo" "$dir"
+          chown -R 1000:1000 "$dir"
+        fi
+        echo "devenv: provisioning from $dir at $(git -c safe.directory="$dir" -C "$dir" log -1 --format='%h %s')"
+        exec "$dir/provision.sh" --sbx --yes
+  startup:
+    # Every start, as the agent user, detached from the session. `devenv start`
+    # re-applies settings (sbx rewrites ~/.claude/settings.json on create),
+    # the herdr config, skill and memory links and the warnings cache. It
+    # never fails the startup dispatcher.
+    - description: devenv start
+      background: true
+      command:
+        - bash
+        - -c
+        - |
+          . /etc/sandbox-persistent.sh 2>/dev/null
+          mkdir -p "$HOME/.cache/devenv"
+          [ -x "${DEVENV_DIR:-}/bin/devenv" ] && "$DEVENV_DIR/bin/devenv" start >>"$HOME/.cache/devenv/start.log" 2>&1
+          exit 0

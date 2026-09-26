@@ -1,0 +1,13 @@
+# herdr configuration, managed by devenv (herdr/config.toml in the devenv repo).
+# Installed to ~/.config/herdr/config.toml; a differing copy is kept as .bak.
+# `herdr --default-config` prints every key. Key names confirmed with herdr 0.8.0.
+
+# Skip the first-run notification setup.
+onboarding = false
+
+[update]
+# Never contact herdr.dev: devenv pins herdr (versions.env) and blocks herdr.dev.
+version_check = false
+# Detection rules come from the bundled manifest plus devenv's local override
+# in ~/.config/herdr/agent-detection/, never from herdr.dev.
+manifest_check = false

@@ -1,0 +1,6 @@
+# shellcheck configuration for devenv. `devenv test` lints the entry points
+# with -x, which follows the sourced lib/ files and checks them in context.
+external-sources=true
+source-path=SCRIPTDIR
+# Messages print "~/..." as text for the reader; it is not meant to expand.
+disable=SC2088
