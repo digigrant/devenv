@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fake busctl for tests/secrets.sh: answers the Secret Service's SearchItems
+# for `service <s> key <k>` from the same fake keyring as tests/fakes/
+# secret-tool (FAKE_KR_STATE, $FAKE_LOG/kr, $FAKE_LOG/unlocked), in the shape
+# of `busctl --json=short`. Logs its argv to $FAKE_LOG/argv.
+set -euo pipefail
+printf 'busctl %s\n' "$*" >> "$FAKE_LOG/argv"
+state=${FAKE_KR_STATE:-ok}
+[ "$state" = locked ] && [ -e "$FAKE_LOG/unlocked" ] && state=ok
+if [ "$state" = nobus ]; then
+  echo "Failed to connect to user scope bus via local transport: No such file or directory" >&2; exit 1
+fi
+want=(--user --timeout=10 --json=short call org.freedesktop.secrets /org/freedesktop/secrets
+      org.freedesktop.Secret.Service SearchItems 'a{ss}' 2 service)
+[ $# -eq 14 ] && [ "${*:1:11}" = "${want[*]}" ] && [ "${13}" = key ] || { echo "fake busctl: unexpected call" >&2; exit 2; }
+s=${12} k=${14}
+found=0
+if [ -f "$FAKE_LOG/kr/$s/$k" ]; then found=1
+elif [ "$s" = devenv-infisical ]; then
+  case "$state:$k" in
+    empty:*) ;;
+    missing:project-id) found=1 ;;
+    missing:*) ;;
+    *) found=1 ;;
+  esac
+fi
+path='"/org/freedesktop/secrets/collection/login/1"'
+if [ "$found" = 0 ]; then echo '{"type":"aoao","data":[[],[]]}'
+elif [ "$state" = locked ]; then echo "{\"type\":\"aoao\",\"data\":[[],[$path]]}"
+else echo "{\"type\":\"aoao\",\"data\":[[$path],[]]}"; fi

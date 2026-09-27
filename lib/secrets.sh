@@ -37,63 +37,93 @@ keyring_bus_default() {
   fi
 }
 
-# The keyring's view of devenv's entries, without prompting: `secret-tool
-# search` without --unlock reports a locked item instead of asking for the
-# password, whereas `lookup` would open an unlock prompt. Prints the
-# "attribute.key = <k>" lines and secret-tool's own "secret-tool: …" errors;
-# the secrets that `search` prints are dropped by grep here and never kept.
-keyring_scan() {
+# What the keyring checks need, one line per missing tool with its install
+# command; nothing when all are there.
+keyring_tools_missing() {
+  have secret-tool || echo "secret-tool is not installed; run: sudo apt-get install -y libsecret-tools"
+  have busctl || echo "busctl is not installed; run: sudo apt-get install -y systemd"
+  have jq || echo "jq is not installed; run: sudo apt-get install -y jq"
+  return 0
+}
+
+# keyring_state KEY: prints unlocked, locked or missing for devenv's entry KEY.
+# It asks the Secret Service's SearchItems, which matches attributes without
+# loading any secret and never prompts, even when the keyring is locked
+# (checked against gnome-keyring: `secret-tool lookup` calls Unlock and opens
+# the unlock window, and `secret-tool search` asks for every secret). When no
+# Secret Service answers, prints busctl's error and returns 1.
+keyring_state() {
+  local out
+  if ! out=$(timeout 15 busctl --user --timeout=10 --json=short call org.freedesktop.secrets \
+               /org/freedesktop/secrets org.freedesktop.Secret.Service SearchItems \
+               'a{ss}' 2 service "$(keyring_service)" key "$1" 2>&1 </dev/null); then
+    printf '%s\n' "${out:-no answer within 15 seconds}" | grep -m 1 . || true
+    return 1
+  fi
+  printf '%s\n' "$out" | tail -n 1 | jq -r '.data
+    | if (.[0] | length) > 0 then "unlocked" elif (.[1] | length) > 0 then "locked" else "missing" end' 2>/dev/null \
+    || { echo "an unexpected answer to SearchItems"; return 1; }
+}
+
+# "<key> <state>" for each of the three entries; when no Secret Service
+# answers, prints why on one line and returns 1. Never prompts.
+keyring_states() {
+  local k s
   keyring_bus_default
-  timeout 10 secret-tool search --all service "$(keyring_service)" 2>&1 </dev/null \
-    | grep -E '^attribute\.key = |^secret-tool: ' | sort -u || true
+  for k in "${SECRETS_KEYRING_KEYS[@]}"; do
+    s=$(keyring_state "$k") || { echo "$s"; return 1; }
+    printf '%s %s\n' "$k" "$s"
+  done
 }
 
 # Prints why the keyring entries can't be read and returns 0, or prints
 # nothing and returns 1 when all three can be read. Never prompts.
 keyring_problem() {
-  local out k missing=()
-  if ! have secret-tool; then
-    echo "secret-tool is not installed; run: sudo apt-get install -y libsecret-tools"; return 0
+  local p states missing
+  p=$(keyring_tools_missing)
+  if [ -n "$p" ]; then printf '%s\n' "$p" | head -n 1; return 0; fi
+  if ! states=$(keyring_states); then
+    echo "no Secret Service answers ($states); is gnome-keyring running?"; return 0
   fi
-  out=$(keyring_scan)
-  if printf '%s\n' "$out" | grep -q '^secret-tool: .*locked'; then
+  if printf '%s\n' "$states" | grep -q ' locked$'; then
     echo "keyring locked; run sbx env run (host-prepare unlocks it)"; return 0
   fi
-  if printf '%s\n' "$out" | grep -q '^secret-tool: '; then
-    echo "no Secret Service answers ($(printf '%s\n' "$out" | grep -m 1 '^secret-tool: ' | cut -c14-)); is gnome-keyring running?"; return 0
-  fi
-  for k in "${SECRETS_KEYRING_KEYS[@]}"; do
-    printf '%s\n' "$out" | grep -qxF "attribute.key = $k" || missing+=("$k")
-  done
-  if [ ${#missing[@]} -gt 0 ]; then
-    echo "keyring entry missing: ${missing[*]} (service $(keyring_service)); run: ~/devenv/bin/devenv secrets-init"; return 0
+  missing=$(printf '%s\n' "$states" | awk '$2 == "missing" { printf "%s%s", sep, $1; sep = " " }')
+  if [ -n "$missing" ]; then
+    echo "keyring entry missing: $missing (service $(keyring_service)); run: ~/devenv/bin/devenv secrets-init"; return 0
   fi
   return 1
 }
 
-keyring_locked() { keyring_scan | grep -q '^secret-tool: .*locked'; }
+# The first locked entry, or nothing.
+keyring_locked_key() {
+  keyring_states 2>/dev/null | awk '$2 == "locked" { print $1; exit }' || true
+}
 
-# When the keyring is locked (after every WSL restart, or a reboot of a
-# headless host), have the Secret Service ask for its password and wait: a
-# `secret-tool lookup` of a locked entry opens the Secret Service's own unlock
-# prompt, a pop-up window under WSLg or on a desktop. The password never
-# passes through this shell; the looked-up value goes to /dev/null. A no-op
-# when the keyring is unlocked, or has no devenv entries yet (the checks after
-# it report that).
+# When the keyring is locked (after every WSL restart), have the Secret
+# Service ask for its password and wait: a `secret-tool lookup` of a locked
+# entry makes it open its own unlock window (a pop-up under WSLg or on a
+# desktop). The password never passes through this shell, and the looked-up
+# value goes to /dev/null. Without a display the window can't open and the
+# lookup fails at once. A no-op when the keyring is unlocked or has no devenv
+# entries yet (the checks after it report that).
 keyring_unlock_if_locked() {
-  have secret-tool || return 0
-  keyring_locked || return 0
-  log "the keyring is locked (as after a restart); a window asks for its password now"
-  timeout 300 secret-tool lookup service "$(keyring_service)" key project-id >/dev/null 2>&1 </dev/null || true
-  if ! keyring_locked; then ok "keyring unlocked"; return 0; fi
+  local k
+  [ -z "$(keyring_tools_missing)" ] || return 0
+  k=$(keyring_locked_key)
+  [ -n "$k" ] || return 0
+  log "the keyring is locked (as after every restart): a window asks for the keyring password now"
+  timeout 300 secret-tool lookup service "$(keyring_service)" key "$k" >/dev/null 2>&1 </dev/null || true
+  if [ -z "$(keyring_locked_key)" ]; then ok "keyring unlocked"; return 0; fi
   if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    die "the keyring is locked and no window can ask for its password (no DISPLAY); unlock it as README: Troubleshooting describes, then run sbx env run again"
+    die "the keyring is locked and no window can ask for its password here (no DISPLAY or WAYLAND_DISPLAY); run sbx env run in a terminal that can open windows (WSLg or a desktop session)"
   fi
   die "the keyring is still locked (the password window was closed or timed out); run sbx env run again"
 }
 
 # keyring_read KEY: prints the entry's value. Only after keyring_problem said
-# the entries are there and unlocked.
+# the entries are there and unlocked. The timeout is a backstop: should the
+# keyring lock in between, the lookup would open the unlock window.
 keyring_read() {
   local v
   v=$(timeout 10 secret-tool lookup service "$(keyring_service)" key "$1" </dev/null 2>/dev/null) || return 1
@@ -101,9 +131,11 @@ keyring_read() {
   printf '%s' "$v"
 }
 
-# keyring_store KEY: stores stdin as the entry's value (replacing it).
+# keyring_store KEY: stores stdin as the entry's value (replacing it). With no
+# keyring yet, the Secret Service first opens a window asking for a new
+# keyring password, hence the long timeout.
 keyring_store() {
-  timeout 30 secret-tool store --label="$(keyring_label "$1")" service "$(keyring_service)" key "$1"
+  timeout 300 secret-tool store --label="$(keyring_label "$1")" service "$(keyring_service)" key "$1"
 }
 
 # A value for a double-quoted string in a curl config file.
@@ -245,8 +277,11 @@ secrets_problems() {
   local p code login exp tp
   if p=$(keyring_problem); then echo "$p"; return 0; fi
   echo "ok: keyring entries present (service $(keyring_service): ${SECRETS_KEYRING_KEYS[*]})"
+  # One login per fetch. After a failed fetch, don't try the second: 3 failed
+  # logins lock sbx-host for 5 minutes.
   if ! secret_fetch_or_error "$SECRET_GITHUB"; then
     echo "fetching $SECRET_GITHUB failed: $SECRET_ERROR"
+    return 0
   elif tp=$(printf '%s' "$SECRET_VALUE" | secret_shape_problem "$SECRET_GITHUB"); then
     echo "$tp"
   else

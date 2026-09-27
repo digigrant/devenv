@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# devenv secret-get, doctor and host-prepare against fakes (docs/SECRETS.md
-# §6.9): tests/fakes/{secret-tool,curl,sbx} come first on PATH, with dummy
-# values, a temporary HOME and TMPDIR, and a copy of this working tree. No
-# real keyring, Infisical, GitHub or sbx is touched.
+# devenv secret-get, secrets-init, doctor and host-prepare against fakes
+# (docs/SECRETS.md §6.9): tests/fakes/{secret-tool,busctl,curl,sbx} come first
+# on PATH, with dummy values, a temporary HOME and TMPDIR, and a copy of this
+# working tree. No real keyring, Infisical, GitHub or sbx is touched.
 #   tests/secrets.sh
 # pass and fail always succeed, so `test && pass || fail` is a safe if/else.
 # shellcheck disable=SC2015
@@ -40,7 +40,7 @@ run() {
   while [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
   : > "$FAKE_LOG/argv"
-  rm -f "$FAKE_LOG/unlocked"
+  rm -rf "$FAKE_LOG/unlocked" "$FAKE_LOG/kr"
   RC=0
   env -i HOME="$W/home" TMPDIR="$W/tmp" PATH="$ROOT/tests/fakes:/usr/local/bin:/usr/bin:/bin" \
     XDG_RUNTIME_DIR="$W/tmp" FAKE_LOG="$FAKE_LOG" FAKE_PROJECT_ID="$FAKE_PROJECT_ID" \
@@ -49,6 +49,27 @@ run() {
     "${envs[@]}" setsid bash "$DEV" "$@" > "$W/out" 2> "$W/err" < /dev/null || RC=$?
   OUT=$(cat "$W/out"); ERR=$(cat "$W/err")
 }
+
+# tty_run INPUT VAR=VALUE... -- ARGS: like run, on a pseudo-terminal fed INPUT
+# (stdout and stderr both land in OUT).
+tty_run() {
+  local input=$1 envs=()
+  shift
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  : > "$FAKE_LOG/argv"
+  rm -rf "$FAKE_LOG/unlocked" "$FAKE_LOG/kr"
+  RC=0
+  printf '%s' "$input" | env -i HOME="$W/home" TMPDIR="$W/tmp" PATH="$ROOT/tests/fakes:/usr/local/bin:/usr/bin:/bin" \
+    XDG_RUNTIME_DIR="$W/tmp" FAKE_LOG="$FAKE_LOG" FAKE_PROJECT_ID="$FAKE_PROJECT_ID" \
+    FAKE_CLIENT_ID="$FAKE_CLIENT_ID" FAKE_CLIENT_SECRET="$FAKE_CLIENT_SECRET" \
+    FAKE_ACCESS_TOKEN="$FAKE_ACCESS_TOKEN" FAKE_GITHUB="$FAKE_GITHUB" FAKE_CLAUDE="$FAKE_CLAUDE" \
+    "${envs[@]}" script -E never -qefc "bash $(printf '%q' "$DEV") $*" /dev/null > "$W/out" 2>&1 || RC=$?
+  OUT=$(tr -d '\r' < "$W/out"); ERR=''
+}
+
+# Universal Auth logins in the last run.
+logins() { grep -c '^curl .*/api/v1/auth/universal-auth/login' "$FAKE_LOG/argv" || true; }
 
 snapshot() { find "$W/home" "$W/tmp" -printf '%p %y %s %T@\n' | sort; }
 
@@ -86,15 +107,18 @@ no_leak_in_args "CLAUDE_CODE_OAUTH_TOKEN"
   || { fail "files under HOME or TMPDIR changed:"; diff <(printf '%s\n' "$before") <(snapshot) || true; }
 
 run FAKE_KR_STATE=locked -- secret-get GITHUB_GEJ_MACHINE_PAT
-one_line_failure "locked keyring" "keyring locked"
-grep -q '^secret-tool lookup' "$FAKE_LOG/argv" && fail "locked keyring: secret-tool lookup ran (it would prompt)" \
-  || pass "locked keyring: no secret-tool lookup (never prompts)"
+one_line_failure "locked keyring" "keyring locked; run sbx env run"
+grep -q '^secret-tool' "$FAKE_LOG/argv" && fail "locked keyring: secret-tool ran (a lookup opens the unlock window)" \
+  || pass "locked keyring: only SearchItems asked, no secret-tool (never prompts)"
+grep -q '^curl' "$FAKE_LOG/argv" && fail "locked keyring: Infisical was called" || pass "locked keyring: no login attempt"
 run FAKE_KR_STATE=missing -- secret-get GITHUB_GEJ_MACHINE_PAT
 one_line_failure "missing entries" "keyring entry missing: client-id client-secret"
 run DEVENV_KEYRING_SERVICE=devenv-missing -- secret-get GITHUB_GEJ_MACHINE_PAT
 one_line_failure "DEVENV_KEYRING_SERVICE=devenv-missing" "keyring entry missing: project-id client-id client-secret (service devenv-missing)"
+run FAKE_KR_STATE=empty -- secret-get CLAUDE_CODE_OAUTH_TOKEN
+one_line_failure "no entries" "keyring entry missing: project-id client-id client-secret (service devenv-infisical); run: ~/devenv/bin/devenv secrets-init"
 run FAKE_KR_STATE=nobus -- secret-get GITHUB_GEJ_MACHINE_PAT
-one_line_failure "no Secret Service" "no Secret Service answers"
+one_line_failure "no Secret Service" "no Secret Service answers (Failed to connect to user scope bus"
 run FAKE_LOGIN_CODE=401 -- secret-get GITHUB_GEJ_MACHINE_PAT
 one_line_failure "login HTTP 401" "rejected the sbx-host login (HTTP 401)"
 run FAKE_READ_CODE=401 -- secret-get GITHUB_GEJ_MACHINE_PAT
@@ -121,6 +145,12 @@ run DEVENV_KEYRING_SERVICE=devenv-missing -- doctor --host
 run FAKE_READ_CODE=404 -- doctor --host
 [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q 'FAIL  fetching GITHUB_GEJ_MACHINE_PAT failed: Infisical has no' \
   && pass "a failed fetch: FAIL and exit 1" || fail "doctor with a failed fetch: exit $RC"
+run FAKE_LOGIN_CODE=401 -- doctor --host
+[ "$RC" = 1 ] && [ "$(logins)" = 1 ] && pass "a rejected login: FAIL after one login attempt, not two (lockout after 3)" \
+  || fail "doctor with a rejected login: exit $RC, $(logins) login attempts"
+run FAKE_KR_STATE=locked -- doctor --host
+[ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q 'FAIL  keyring locked; run sbx env run' && ! grep -q '^secret-tool' "$FAKE_LOG/argv" \
+  && pass "locked keyring: FAIL without opening the unlock window" || fail "doctor with a locked keyring: exit $RC"
 mkdir -p "$W/home/.config/devenv/secrets" "$W/home/.infisical/secrets-backup" && touch "$W/home/.infisical/secrets-backup/x"
 run -- doctor --host
 printf '%s\n' "$OUT" | grep -q 'warn  plain-text secret files left over' && printf '%s\n' "$OUT" | grep -q 'warn  Infisical CLI backups left over' \
@@ -135,15 +165,19 @@ if [ "$RC" = 0 ] && printf '%s' "$cmd" | grep -qF -- "--command $W/devenv/checko
 else fail "host-prepare: exit $RC, set-custom: ${cmd:-none}, stderr: $ERR"; fi
 no_leak_in_args "host-prepare"
 [ -d "$W/devenv/checkout/dev" ] && pass "created dev/" || fail "dev/ was not created"
+run FAKE_LOGIN_CODE=401 -- host-prepare
+[ "$RC" != 0 ] && [ "$(logins)" = 1 ] && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+  && pass "a rejected login: stops before sbx after one login attempt" || fail "host-prepare with a rejected login: exit $RC, $(logins) login attempts"
 run FAKE_KR_STATE=locked FAKE_KR_PROMPT=accept DISPLAY=:0 -- host-prepare
-[ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'a window asks for its password' && printf '%s' "$ERR" | grep -q 'keyring unlocked' \
-  && grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" && pass "locked keyring: the unlock window opens, then host-prepare carries on" \
+[ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'a window asks for the keyring password now' && printf '%s' "$ERR" | grep -q 'keyring unlocked' \
+  && [ "$(grep -c '^secret-tool lookup' "$FAKE_LOG/argv")" -ge 1 ] && grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+  && pass "locked keyring: a lookup opens the unlock window, then host-prepare carries on" \
   || fail "host-prepare with a locked keyring and an accepted window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked DISPLAY=:0 -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'the keyring is still locked' && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
   && pass "locked keyring, window closed: stops before sbx" || fail "host-prepare with a dismissed window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked -- host-prepare
-[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'no window can ask for its password (no DISPLAY)' \
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'no window can ask for its password here (no DISPLAY or WAYLAND_DISPLAY)' \
   && pass "locked keyring without a display: clear instructions" || fail "host-prepare locked without a display: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=missing -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'keyring entry missing' \
@@ -151,6 +185,29 @@ run FAKE_KR_STATE=missing -- host-prepare
 mkdir -p "$W/home/.config/devenv/secrets"
 run -- host-prepare
 printf '%s' "$ERR" | grep -q 'warning: plain-text secret files left over' && pass "warns about leftover secret files" || fail "no leftover warning"
+rm -rf "$W/home/.config/devenv/secrets"
+
+echo "secrets-init"
+run -- secrets-init
+one_line_failure "without a terminal" "secrets-init is interactive"
+tty_run "$FAKE_PROJECT_ID"$'\n'"$FAKE_CLIENT_ID"$'\n'"$FAKE_CLIENT_SECRET"$'\n' FAKE_KR_STATE=empty -- secrets-init
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qF "GITHUB_GEJ_MACHINE_PAT: ok (${#FAKE_GITHUB} chars, ghp_…)" \
+   && printf '%s\n' "$OUT" | grep -qF "CLAUDE_CODE_OAUTH_TOKEN: ok (${#FAKE_CLAUDE} chars, sk-ant-oat01-…)"; then
+  pass "a new machine: stores the three values and test-fetches both secrets"
+else fail "secrets-init on a new machine: exit $RC, output: $OUT"; fi
+[ "$(cat "$FAKE_LOG/kr/devenv-infisical/project-id")" = "$FAKE_PROJECT_ID" ] \
+  && [ "$(cat "$FAKE_LOG/kr/devenv-infisical/client-id")" = "$FAKE_CLIENT_ID" ] \
+  && [ "$(cat "$FAKE_LOG/kr/devenv-infisical/client-secret")" = "$FAKE_CLIENT_SECRET" ] \
+  && pass "each value reached secret-tool store exactly, on stdin" || fail "the stored values differ from the typed ones"
+no_leak_in_args "secrets-init"
+printf '%s\n' "$OUT" | grep -qF -e "$FAKE_GITHUB" -e "$FAKE_CLAUDE" && fail "secrets-init printed a secret" || pass "secrets-init printed no secret"
+tty_run "$FAKE_PROJECT_ID"$'\n'"$FAKE_CLIENT_ID"$'\n'"fake-wrong-secret"$'\n' FAKE_KR_STATE=empty -- secrets-init
+[ "$RC" != 0 ] && printf '%s\n' "$OUT" | grep -qF "GITHUB_GEJ_MACHINE_PAT: FAILED: Infisical rejected the sbx-host login (HTTP 401)" && [ "$(logins)" = 1 ] \
+  && pass "a wrong client secret: FAILED after one login attempt" || fail "secrets-init with a wrong client secret: exit $RC, $(logins) logins, output: $OUT"
+tty_run $'\n\n\n' -- secrets-init
+[ "$RC" = 0 ] && [ "$(printf '%s\n' "$OUT" | grep -c 'kept the stored')" = 3 ] && ! grep -q '^secret-tool store' "$FAKE_LOG/argv" \
+  && printf '%s\n' "$OUT" | grep -qF "GITHUB_GEJ_MACHINE_PAT: ok" && pass "run again: Enter keeps each stored entry" \
+  || fail "secrets-init run again with Enter: exit $RC, output: $OUT"
 
 echo
 if [ "$fails" = 0 ]; then echo "secrets: PASS"; else echo "secrets: FAIL ($fails)"; exit 1; fi

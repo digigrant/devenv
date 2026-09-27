@@ -11,6 +11,8 @@
 #   5. tests/sbx-sim.sh: the kit's own install and startup snippets in a
 #      container laid out like a Docker Sandbox (the devenv clone, the
 #      root-to-agent handoff, ownership, skill links, a clean re-run).
+#   6. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
+#      step against a real gnome-keyring in an ubuntu:26.04 container.
 # --no-containers runs only 1 to 3.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
@@ -69,6 +71,9 @@ cmd_test() {
     echo "== sbx simulation"
     if bash "$DEVENV_ROOT/tests/sbx-sim.sh"; then results+=("PASS sbx simulation")
     else results+=("FAIL sbx simulation"); rc=1; fi
+    echo "== keyring (real gnome-keyring)"
+    if bash "$DEVENV_ROOT/tests/keyring.sh"; then results+=("PASS keyring")
+    else results+=("FAIL keyring"); rc=1; fi
   fi
 
   echo
