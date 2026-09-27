@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design approved by the owner on 2026-09-27. **Not built yet.** Replaces D7's plain-text secret files; everything else in [SPEC.md](SPEC.md) still holds. |
+| **Status** | Design approved by the owner on 2026-09-27. **Built** on 2026-09-27 (branch `fm/devenv-devenv-infisical-secrets-manager-df`, PR https://github.com/digigrant/devenv/pull/5); host verification (HOST-VERIFY §8.3 onward) pending. It replaced D7's plain-text secret files; SPEC.md now describes the result. Where the build differs from this text, an **As built** note says so. |
 | **Written** | 2026-09-27, from a design interview with the owner, with facts checked on the owner's host |
 | **Readers** | The agent implementing it (§6), and the owner (§7, §8) |
 | **Researched against** | sbx v0.45.1, Infisical CLI 0.43.137, Infisical Cloud (US), Ubuntu 26.04 on WSL2 |
@@ -87,11 +87,11 @@ Hiding a value doesn't stop misuse. sbx attaches the GitHub token to every reque
 
 ## 5. Probes before building (host; owner runs them from HOST-VERIFY §8)
 
-| # | Question | Decides |
-|---|---|---|
-| P1 | Can `secret-tool` store and look up an entry on WSL? What happens when no keyring exists, and after a WSL restart (locked)? | How `secrets-init` creates the keyring, and how `host-prepare` unlocks it |
-| P2 | Logged in as `sbx-host`, does `infisical secrets get` write anything under `$HOME`? | CLI or `curl` in `secret-get` (S6) |
-| P3 | Can a command that sandboxd runs read the Secret Service? | Whether `secret-get` must set `DBUS_SESSION_BUS_ADDRESS` itself; if even that fails, stop and ask |
+| # | Question | Decides | Result (owner, 2026-09-27) |
+|---|---|---|---|
+| P1 | Can `secret-tool` store and look up an entry on WSL? What happens when no keyring exists, and after a WSL restart (locked)? | How `secrets-init` creates the keyring, and how `host-prepare` unlocks it | **Pass.** The first `secret-tool store` asked for the new keyring's password in a **pop-up window** (the Secret Service's prompter under WSLg), not in the terminal. After `wsl --shutdown` the keyring is **locked**, and the next lookup opened a pop-up asking to unlock it, then printed the value. |
+| P2 | Logged in as `sbx-host`, does `infisical secrets get` write anything under `$HOME`? | CLI or `curl` in `secret-get` (S6) | **No result**: at the time it wasn't clear where on the website the three values come from (README and HOST-VERIFY §8.1 now say). `secret-get` uses `curl` (S6's other branch), which meets S6 whatever P2 shows; a later P2 run is informational only. |
+| P3 | Can a command that sandboxd runs read the Secret Service? | Whether `secret-get` must set `DBUS_SESSION_BUS_ADDRESS` itself; if even that fails, stop and ask | **Pass**, as is, without setting `DBUS_SESSION_BUS_ADDRESS`. The §6.4 default stays (harmless). |
 
 ## 6. What to build
 
@@ -119,6 +119,7 @@ Three `secret-tool` entries with attributes `service devenv-infisical key <k>`, 
 
 - **Refuses outside a host shell:** inside a sandbox, or when stdin isn't a TTY.
 - **Checks prerequisites:** `secret-tool` is present (otherwise print the `apt` command) and a Secret Service answers. When no keyring exists, it creates one with a password, as P1 showed works.
+  - **As built:** it also needs `busctl` (the `systemd` package) and `jq`. It doesn't create the keyring itself: P1 showed that the first `secret-tool store` makes the Secret Service open a window asking for the new keyring's password, so `secrets-init` says so and waits for it. A locked keyring is unlocked first, as in `host-prepare`. Enter at a prompt keeps an entry that already exists, and the test fetch stops at the first failure (one failed login, not two).
 - **Prompts for the values** with echo off (`read -rs`): project ID, client ID, client secret. Each is stored at once, piped into `secret-tool store`.
 - **Runs a test fetch** for `$SECRET_GITHUB` and `$SECRET_CLAUDE` and prints only the name, the length and a shape check, e.g. `GITHUB_GEJ_MACHINE_PAT: ok (40 chars, ghp_…)` or `CLAUDE_CODE_OAUTH_TOKEN: ok (…, sk-ant-oat01-…)`.
 - **Can be run again safely.** Running it again replaces the entries, which is how a machine gets a new client secret.
@@ -139,6 +140,8 @@ Three `secret-tool` entries with attributes `service devenv-infisical key <k>`, 
 - **Accepts only the configured names** (`$SECRET_GITHUB`, `$SECRET_CLAUDE`). The identity can't read anything else anyway; this is a guard against typos.
 - **Never reads or runs anything from `dev/`** (SPEC §10.3).
 - **The REST endpoints** (if P2 rules out the CLI): check them against the current Infisical API reference. They are `POST /api/v1/auth/universal-auth/login`, then the single-secret read (`/api/v4/secrets/{name}` or `/api/v3/secrets/raw/{name}`, with the project ID, environment and path as parameters).
+- **As built:** `curl`, since P2 has no result. Login: `POST $INFISICAL_DOMAIN/api/v1/auth/universal-auth/login` with `{clientId, clientSecret}` → `accessToken`. Read: `GET $INFISICAL_DOMAIN/api/v4/secrets/{name}?projectId=…&environment=…&secretPath=…&viewSecretValue=true&expandSecretReferences=true&includeImports=true` → `secret.secretValue` (both checked against Infisical's API reference on 2026-09-27). The output is the value and a newline, as `cat` of the old secret files gave sbx.
+- **As built, the locked check:** a `secret-tool lookup` on a locked keyring makes the Secret Service open its unlock window, and `secret-tool search` asks for every secret. So `secret-get` asks the Secret Service's `SearchItems` method (`busctl --user … SearchItems`), which reports each entry as unlocked, locked or missing without loading a secret or prompting. Checked against gnome-keyring 50 in a container, watching the D-Bus calls (`tests/keyring.sh`). The lookups that follow have a 10-second timeout as a backstop.
 
 ### 6.5 `sbxenv.yaml`
 
@@ -151,10 +154,13 @@ secrets:
 - **The path:** the checkout is `~/devenv` on every host (README, HOST-VERIFY step 2). If sbx expands `${{ env.fileDir }}` inside `command:`, use that instead of `$HOME/devenv`.
 - **Update the comment block** above `secrets:`.
 - **The change takes effect on the next create,** like any secret change (SPEC §2.2).
+- **As built:** `command: '"${{ env.fileDir }}/bin/devenv" secret-get GITHUB_GEJ_MACHINE_PAT'`. Docker's environment-file reference says the directory references expand in any YAML value (sbx ≥ 0.43.0); HOST-VERIFY §8.3 checks the command sbx stored.
 
 ### 6.6 `host-prepare`
 
 - **Unlock first.** When the keyring is locked, prompt for its password on the TTY and unlock it, as worked out in P1. Without a TTY, fail with instructions.
+  - **As built (P1):** the unlock prompt is the Secret Service's own pop-up window, so `host-prepare` never reads the password. When `SearchItems` reports the keyring locked, it runs a `secret-tool lookup` (value to `/dev/null`), which opens that window, and waits up to 3 minutes (the hook's timeout is 5). With no display the window can't open, the lookup fails at once, and `host-prepare` stops with instructions. When the keyring is unlocked it does nothing.
+  - **As built:** after a failed fetch it doesn't try the second secret, so a wrong client secret costs one failed login per run, not two.
 - **Replace the secret-file checks with:**
   - the three keyring entries exist;
   - `devenv secret-get` succeeds for `$SECRET_GITHUB`, and for `$SECRET_CLAUDE` in token mode;
@@ -206,7 +212,7 @@ secrets:
 
 **From then on, unattended:** when an agent calls GitHub or Anthropic, sbx needs the real value. It runs `devenv secret-get` on the host, which reads the keyring, logs in to Infisical, gets a 5-minute access token, reads the one secret, hands it to sbx's memory and discards the token. This happens at most once every 55 minutes per secret.
 
-**After a reboot:** a Linux desktop needs nothing. On WSL or a headless host, `host-prepare` asks for the keyring password at the next `sbx env run`.
+**After a reboot:** a Linux desktop needs nothing. On WSL, a pop-up window asks for the keyring password at the next `sbx env run` (`host-prepare` opens it). A host with no display can't show that window: `host-prepare` stops and says so.
 
 **Replacing a token:** paste the new value into the Infisical website. Every machine picks it up within 55 minutes.
 

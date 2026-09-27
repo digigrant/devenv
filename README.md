@@ -56,14 +56,10 @@ host                                  sandbox "dev"
    ```sh
    git clone https://github.com/digigrant/devenv ~/devenv
    ```
-3. Put the secrets in files only you can read:
-   ```sh
-   install -d -m 700 ~/.config/devenv/secrets
-   (umask 077; cat > ~/.config/devenv/secrets/anthropic)   # `claude setup-token` token (sk-ant-oat01-…), then Ctrl-D
-   (umask 077; cat > ~/.config/devenv/secrets/github)      # the gej-machine token, then Ctrl-D
-   ```
-   Put the setup-token's expiry date in `ANTHROPIC_TOKEN_EXPIRES` in
-   `devenv.conf` (by PR), so `devenv check` can warn before it runs out.
+3. Store this machine's Infisical login in its keyring:
+   `~/devenv/bin/devenv secrets-init`. The secrets themselves live in
+   Infisical; on a machine that has never run devenv, follow
+   [A new machine](#a-new-machine) for where to find the three values.
 4. Check the host: `~/devenv/bin/devenv doctor`
 5. Build and enter the sandbox: `cd ~/devenv && sbx env run`
 
@@ -95,7 +91,12 @@ sbx login                         # a Docker account is required
 sbx policy init balanced
 ```
 
-devenv's host commands also use `bash`, `git` and `jq`.
+devenv's host commands also use `bash`, `git`, `jq`, `curl`, `secret-tool`
+and `busctl`, and a Secret Service (gnome-keyring) for the keyring:
+
+```sh
+sudo apt install jq curl libsecret-tools gnome-keyring   # busctl comes with systemd
+```
 
 On WSL, Docker supports the Linux `sbx` only "best-effort"
 (docker/sbx-releases#397); `devenv doctor` says so. The owner chose it so WSL
@@ -121,7 +122,9 @@ and native Linux behave the same.
   inside it. `devenv doctor` and `devenv host-prepare` refuse to continue
   otherwise.
 - Secrets never go in the repo. The `github` secret is the `gej-machine`
-  token only, never a personal token.
+  token only, never a personal token. Never paste a secret value, or the
+  Infisical client ID, client secret or project ID, into a PR, an issue or an
+  agent's session: they live only in Infisical and in each host's keyring.
 - Never allow `herdr.dev`: herdr is pinned, and its update and manifest
   checks are off.
 - Merges follow Firstmate's rule: never without the owner's explicit word.
@@ -133,8 +136,10 @@ With `CLAUDE_AUTH=token` (the default, in `devenv.conf`), Claude, the first
 mate and every worker run on your Claude subscription through the long-lived
 `claude setup-token` token:
 
-- `devenv host-prepare` stores it in sbx as a **custom secret** for sandbox
-  `dev` (`sbxenv.yaml` can't declare custom secrets). Inside the sandbox
+- The token is `CLAUDE_CODE_OAUTH_TOKEN` in Infisical ([Secrets](#secrets-infisical)).
+  `devenv host-prepare` gives it to sbx as a **custom secret** for sandbox
+  `dev` (`sbxenv.yaml` can't declare custom secrets) whose command is
+  `devenv secret-get CLAUDE_CODE_OAUTH_TOKEN`. Inside the sandbox
   `CLAUDE_CODE_OAUTH_TOKEN` holds only a placeholder; the proxy swaps in the
   real token on requests to `api.anthropic.com`. The placeholder is random and
   kept on the host in `~/.config/devenv/claude-oauth-placeholder`.
@@ -151,6 +156,80 @@ mate and every worker run on your Claude subscription through the long-lived
 `CLAUDE_AUTH=login` instead uses no Claude secret: run `/login` once after
 each rebuild (a full-scope login that survives `sbx stop`). Switching modes
 takes a recreate.
+
+## Secrets (Infisical)
+
+The Claude setup-token and the `gej-machine` GitHub token live in
+[Infisical](https://infisical.com), in one project (the agent project),
+environment `dev`, path `/`, as `CLAUDE_CODE_OAUTH_TOKEN` and
+`GITHUB_GEJ_MACHINE_PAT`. The design is [docs/SECRETS.md](docs/SECRETS.md).
+No secret sits in a file, on the host or in the sandbox:
+
+- Each host logs in to Infisical as the machine identity `sbx-host`, a Viewer
+  on that project and nothing else. The login (the project ID, the client ID
+  and this machine's own client secret) is kept in the host's keyring (the
+  Secret Service, e.g. gnome-keyring), never in the repo or a file.
+- When an agent calls GitHub or Anthropic, sbx needs the real value. It runs
+  `devenv secret-get NAME` on the host, which reads the keyring, logs in to
+  Infisical for a 5-minute access token, reads the one secret and hands it to
+  sbx. sbx keeps it in memory and asks again every 55 minutes. The sandbox
+  only ever sees placeholders.
+- **Replacing a token** is one paste into the secret on the Infisical website.
+  Every machine picks it up within 55 minutes.
+- **Retiring or losing a machine:** revoke its client secret on the website
+  (`sbx-host`, Universal Auth). The other machines keep working.
+
+### A new machine
+
+Already set up once, on the Infisical website: the agent project with both
+secrets, and the machine identity `sbx-host` (Universal Auth, Access Token TTL
+and Max TTL `300`, Lockout on). Then, on the new machine:
+
+1. Install the [host prerequisites](#host-prerequisites) and clone devenv to
+   `~/devenv` ([Quick start](#quick-start-host)).
+2. Collect the three values on the Infisical website, and keep the tab open:
+   - **Project ID:** open the agent project, then **Project Settings**, and
+     select **Copy Project ID**.
+   - **Client ID:** in the organization, **Access Control**, then **Machine
+     Identities**, then `sbx-host`. The Client ID is in its **Universal Auth**
+     section. It is *not* the Identity ID (the one under **Options**, **Copy
+     Machine Identity ID**).
+   - **Client secret:** in that same Universal Auth section, **Add Client
+     Secret**, named after the machine (e.g. `linux-grant`), with TTL `0` (no
+     expiry). Infisical shows it only once.
+   - Check that `sbx-host` can read the project: in the project, **Access
+     Control**, then **Machine Identities**, it must be listed with the
+     **Viewer** role. If it isn't: **Add Machine Identity to Project**,
+     **Assign Existing**, `sbx-host`, role Viewer.
+3. Run `~/devenv/bin/devenv secrets-init` and paste each value at its prompt
+   (nothing shows as you paste). If the machine has no keyring yet, a window
+   asks you to choose a keyring password after the first value: pick a real
+   one, you type it after every WSL restart. It ends with:
+   ```text
+   Test fetch:
+     GITHUB_GEJ_MACHINE_PAT: ok (40 chars, ghp_…)
+     CLAUDE_CODE_OAUTH_TOKEN: ok (<n> chars, sk-ant-oat01-…)
+   devenv: ✓ done; the Infisical website tab can be closed
+   ```
+4. Start: `cd ~/devenv && sbx env run`.
+
+**Careful with retries.** 3 failed logins lock `sbx-host` for 5 minutes
+(the count starts again once 30 seconds pass without a failure), and during
+a lockout even the right values fail. After a failed test fetch, check
+the values, wait 5 minutes, then run `secrets-init` again (Enter keeps the
+entries you don't change). On the website, `sbx-host`, Universal Auth,
+**Reset All Lockouts** ends a lockout at once. devenv itself stops after the
+first failed login in a run.
+
+**After a restart.** WSL locks the keyring every time it restarts. At the next
+`sbx env run`, `devenv host-prepare` opens a pop-up window asking for the
+keyring password (the one from step 3); type it and the run carries on. A
+Linux desktop unlocks the keyring at login instead. A host with no display
+can't show the window: host-prepare stops and says so.
+
+**A new client secret for this machine** (revoked or lost): add one on the
+website as in step 2, then run `devenv secrets-init` and press Enter for the
+project ID and client ID.
 
 ## Choosing what the sandbox opens
 
@@ -170,7 +249,7 @@ Edit it and run `sbx env run` again; no recreate is needed.
 |---|---|---|
 | devenv (host) | `~/devenv`, never mounted | yes |
 | devenv (sandbox) | `~/fm-projects/devenv`, cloned at create | no: cloned again at the next create |
-| Secrets | host `~/.config/devenv/secrets/` (0600) | yes |
+| Secrets | Infisical; this host's Infisical login in its keyring | yes |
 | Firstmate home (clone, `config/`, `data/`, `state/`) | `~/devenv/dev/firstmate` | yes |
 | Claude memory | `~/devenv/dev/.devenv-state/claude-memory/<project>/`, linked from `~/.claude/projects/<project>/memory` | yes |
 | Firstmate project clones | `~/fm-projects` (sandbox disk) | no: push your work |
@@ -205,13 +284,15 @@ devenv's.
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, secret files, checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, the keyring and both Infisical secrets (never prompts), checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
 | `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
 | `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), and a simulated sbx create that runs the kit's own install and startup steps. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets commands against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
-| `devenv host-prepare` | host | The `lifecycle.initialize` hook: checks secrets and the checkout location, creates `dev/`, sets up the Claude sign-in. |
+| `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets and the checkout location, creates `dev/`, sets up the Claude sign-in. |
+| `devenv secrets-init` | host | Stores this machine's Infisical login (project ID, client ID, client secret) in the keyring, then test-fetches both secrets. Interactive; run it again to replace a value (Enter keeps the others). |
+| `devenv secret-get NAME` | host | Prints one secret from Infisical (`GITHUB_GEJ_MACHINE_PAT` or `CLAUDE_CODE_OAUTH_TOKEN`). sbx runs it; you don't need to. |
 
 ### Updating versions
 
@@ -292,7 +373,7 @@ firstmate/config/      starting copy of Firstmate's config
 firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
-tests/                 container smoke test, sbx simulation, status line identity test, fixtures
+tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), fixtures
 ```
 
 ### herdr's Claude detection rules
@@ -318,7 +399,34 @@ when herdr is bumped past the version it was tested with.
   recreate. `SBX_CRED_ANTHROPIC_MODE=apikey` means a stored `anthropic`
   secret outranks the token: remove it (`sbx secret ls`) and recreate. A
   401 with the variable set means the setup-token expired or was revoked: make
-  a new one with `claude setup-token` on the host.
+  a new one with `claude setup-token` on the host, paste it into
+  `CLAUDE_CODE_OAUTH_TOKEN` on the Infisical website, and run `clear`.
+- **`keyring locked; run sbx env run`** (from `devenv doctor`, or in sbx's
+  daemon log when a secret refresh fails): the keyring locked when WSL
+  restarted. `sbx env run` opens the window that unlocks it. If host-prepare
+  says no window can open (no `DISPLAY` or `WAYLAND_DISPLAY`), run
+  `sbx env run` from a terminal that can open windows (a WSLg terminal or a
+  desktop session).
+- **`keyring entry missing`**: this machine has no Infisical login yet, or
+  only part of one. Run `~/devenv/bin/devenv secrets-init`.
+- **`no Secret Service answers`**: no keyring is reachable on the session
+  bus. Check that gnome-keyring is installed and running
+  (`busctl --user list | grep org.freedesktop.secrets`).
+- **`Infisical rejected the sbx-host login (HTTP 401)`**: a wrong client ID
+  or client secret, a revoked client secret, or a lockout after 3 failed
+  logins. If you just retried after a failure, wait 5 minutes (or Reset All
+  Lockouts on the website) before trying again. For a revoked or lost client
+  secret, see [A new machine](#a-new-machine) (last paragraph).
+- **`sbx-host may not read … (HTTP 403)`**: add `sbx-host` to the agent
+  project as Viewer (A new machine, step 2).
+- **`Infisical has no … (HTTP 404)`**: a wrong project ID, or the secret isn't
+  in environment `dev` at path `/` under that exact name.
+- **`GitHub rejects GITHUB_GEJ_MACHINE_PAT (HTTP 401)`**: the token expired or
+  was revoked. Make a new classic `repo` token for `gej-machine` and paste it
+  into `GITHUB_GEJ_MACHINE_PAT` on the Infisical website.
+- **`plain-text secret files left over`**: the old
+  `~/.config/devenv/secrets/` from before Infisical. Delete it once the new
+  path works (docs/SECRETS.md S13).
 - **The sandbox opens Claude instead of herdr.** The kit's entrypoint wasn't
   used (V2). Run `devenv entry` by hand, or use the mixin fallback described in
   `kits/devenv/spec.yaml`.
@@ -348,9 +456,9 @@ when herdr is bumped past the version it was tested with.
 
 ## Roadmap (not built yet)
 
-- Infisical as the secrets manager for the setup-token and the GitHub token,
-  so no secret sits in a file on the host: designed in
-  [docs/SECRETS.md](docs/SECRETS.md), not built yet.
+- Later secrets work ([docs/SECRETS.md](docs/SECRETS.md) §12): GitHub App
+  tokens instead of the `gej-machine` PAT, SSH for git, and wiring
+  Firstmate's typesafe dispatch.
 - A GitHub permission system for agents: rulesets or a bot bypass list, or a
   GitHub App with short-lived tokens through `secrets.github.command` plus
   `refresh`.

@@ -2,21 +2,25 @@
 # devenv test [--image IMG]... [--no-containers] [--no-shellcheck]
 # (spec §6.13, AC5, AC12):
 #   1. tests/statusline-identity.sh
-#   2. shellcheck on every script (installed shellcheck, or the pinned image)
-#   3. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
+#   2. tests/secrets.sh: secret-get, doctor and host-prepare against a fake
+#      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9)
+#   3. shellcheck on every script (installed shellcheck, or the pinned image)
+#   4. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions, a clean second run, and
 #      `devenv check` exiting 0.
-#   4. tests/sbx-sim.sh: the kit's own install and startup snippets in a
+#   5. tests/sbx-sim.sh: the kit's own install and startup snippets in a
 #      container laid out like a Docker Sandbox (the devenv clone, the
 #      root-to-agent handoff, ownership, skill links, a clean re-run).
-# --no-containers runs only 1 and 2.
+#   6. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
+#      step against a real gnome-keyring in an ubuntu:26.04 container.
+# --no-containers runs only 1 to 3.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 
 # The entry points; -x follows what they source, so lib/ is checked in context.
 shellcheck_targets() {
   printf '%s\n' provision.sh bin/devenv bin/devenv-entry agents/claude/statusline.sh \
-    agents/claude/hooks/memory-link.sh tests/*.sh
+    agents/claude/hooks/memory-link.sh tests/*.sh tests/fakes/*
 }
 
 run_shellcheck() {
@@ -48,6 +52,10 @@ cmd_test() {
   if bash "$DEVENV_ROOT/tests/statusline-identity.sh"; then results+=("PASS statusline identity")
   else results+=("FAIL statusline identity"); rc=1; fi
 
+  echo "== secrets (fakes)"
+  if bash "$DEVENV_ROOT/tests/secrets.sh"; then results+=("PASS secrets")
+  else results+=("FAIL secrets"); rc=1; fi
+
   if [ "$lint" = 1 ]; then
     echo "== shellcheck"
     if run_shellcheck; then results+=("PASS shellcheck"); else results+=("FAIL shellcheck"); rc=1; fi
@@ -63,6 +71,9 @@ cmd_test() {
     echo "== sbx simulation"
     if bash "$DEVENV_ROOT/tests/sbx-sim.sh"; then results+=("PASS sbx simulation")
     else results+=("FAIL sbx simulation"); rc=1; fi
+    echo "== keyring (real gnome-keyring)"
+    if bash "$DEVENV_ROOT/tests/keyring.sh"; then results+=("PASS keyring")
+    else results+=("FAIL keyring"); rc=1; fi
   fi
 
   echo
