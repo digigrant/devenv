@@ -36,18 +36,24 @@ env:
   # Edit and re-run `sbx env run`; no recreate needed.
   DEVENV_ENTRY: herdr
 
-# Secret values stay on the host in files only the owner can read (0600).
-# Each is one line to swap for a secrets manager later, e.g. `ref: op://…`.
+# Secret values come from Infisical (docs/SECRETS.md). sbx runs the command
+# on the host and keeps the value only in sandboxd's memory, refreshed every
+# 55 minutes; `devenv secret-get` reads this host's Infisical login from its
+# keyring and prints the one secret. sbx stores the command text in plain
+# text, so it must only ever hold a path and a secret name, never a value.
+# ${{ env.fileDir }} is this checkout (~/devenv). A change here applies when
+# the sandbox is next created.
 #
 # No `anthropic` service secret (V1): sbx would store a `claude setup-token`
 # token as an API key (SBX_CRED_ANTHROPIC_MODE=apikey) and Anthropic rejects
 # it with 401. Instead `devenv host-prepare` gives the token to the sandbox as
 # a custom secret (CLAUDE_CODE_OAUTH_TOKEN, a placeholder the proxy swaps for
-# api.anthropic.com), because sbxenv.yaml can't declare custom secrets. See
-# CLAUDE_AUTH in devenv.conf; `login` means /login once per rebuild instead.
+# api.anthropic.com, fetched by the same `devenv secret-get`), because
+# sbxenv.yaml can't declare custom secrets. See CLAUDE_AUTH in devenv.conf;
+# `login` means /login once per rebuild instead.
 secrets:
   github:
-    command: cat "$HOME/.config/devenv/secrets/github"
+    command: '"${{ env.fileDir }}/bin/devenv" secret-get GITHUB_GEJ_MACHINE_PAT'
 
 # Approves the proxy injecting the github secret (gej-machine) for this
 # third-party kit: gh and the REST API, and git over HTTPS. The anthropic
@@ -69,8 +75,9 @@ sandboxOptions:
 
 lifecycle:
   initialize:
-    # Runs on the host before every create/run: checks the secret files and
-    # the checkout location, creates dev/ and sets up the Claude sign-in.
+    # Runs on the host before every create/run: unlocks the keyring if
+    # needed, checks the Infisical secrets and the checkout location, creates
+    # dev/ and sets up the Claude sign-in.
     - name: devenv host-prepare
       command: ./bin/devenv host-prepare
       workdir: ${{ env.fileDir }}

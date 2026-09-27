@@ -1,14 +1,18 @@
 # shellcheck shell=bash
 # devenv host-prepare: the sbxenv.yaml lifecycle.initialize hook (spec §6.9).
 # Runs on the host before every `sbx env run`:
-#   - doctor-lite: fail fast on missing/unsafe secret files, or a checkout
-#     that overlaps a sandbox workspace other than its own dev/;
+#   - unlock the keyring when it is locked (asks for its password once);
+#   - doctor-lite: fail fast when the keyring entries are missing, a secret
+#     can't be fetched from Infisical or has the wrong shape or account, or
+#     the checkout overlaps a sandbox workspace other than its own dev/;
 #   - create the workspace folder dev/ beside sbxenv.yaml;
 #   - give the sandbox the Claude setup-token as a custom secret (V1).
-# It never reads anything from dev/, which the sandbox can write.
+# Secret values stay in variables and are never printed. It never reads
+# anything from dev/, which the sandbox can write.
 
-# Uses path_within, host_workspaces and checkout_overlap_problems (doctor.sh);
-# bin/devenv sources it.
+# Uses path_within, host_workspaces and checkout_overlap_problems (doctor.sh)
+# and the keyring and Infisical helpers (lib/secrets.sh); bin/devenv sources
+# them.
 
 # The Claude setup-token as an sbx custom secret for this sandbox (V1).
 # The placeholder is random, created once, and kept on the host (never in the
@@ -24,17 +28,14 @@ claude_token_placeholder() {
 }
 
 sync_claude_auth() {
-  local tok=$HOME/.config/devenv/secrets/anthropic phf=$HOME/.config/devenv/claude-oauth-placeholder ph out
+  local phf=$HOME/.config/devenv/claude-oauth-placeholder ph out cmd
   case "$CLAUDE_AUTH" in
     token)
-      [ -f "$tok" ] || die "missing $tok: put the \`claude setup-token\` token there (see README), or set CLAUDE_AUTH=login"
-      [ "$(stat -c %a "$tok")" = 600 ] || die "$tok is mode $(stat -c %a "$tok"); run: chmod 600 $tok"
-      [ "$(stat -c %U "$tok")" = "$(id -un)" ] || die "$tok is not owned by $(id -un)"
-      local tp
-      if tp=$(claude_token_file_problem "$tok"); then die "$tp"; fi
       ph=$(claude_token_placeholder)
+      # sbx stores this command text in plain text: a path and a name only.
+      cmd="$(printf '%q' "$DEVENV_REAL/bin/devenv") secret-get $SECRET_CLAUDE"
       if ! out=$(sbx secret set-custom --sandbox "$CONF_SANDBOX_NAME" --host api.anthropic.com \
-                 --env CLAUDE_CODE_OAUTH_TOKEN --placeholder "$ph" --command "cat $(printf '%q' "$tok")" 2>&1 </dev/null); then
+                 --env CLAUDE_CODE_OAUTH_TOKEN --placeholder "$ph" --command "$cmd" 2>&1 </dev/null); then
         die "sbx secret set-custom failed: $(printf '%s' "$out" | tail -n 1)"
       fi
       ok "Claude setup-token available to sandbox $CONF_SANDBOX_NAME as CLAUDE_CODE_OAUTH_TOKEN (placeholder)"
@@ -50,28 +51,31 @@ sync_claude_auth() {
   esac
 }
 
+# The github command in sbxenv.yaml names the secret itself; it must match
+# SECRET_GITHUB, or secret-get refuses it and the sandbox gets no token.
+sbxenv_github_command_problem() {
+  grep -qE "^[[:space:]]*command:.*secret-get $SECRET_GITHUB'?[[:space:]]*\$" "$DEVENV_REAL/sbxenv.yaml" && return 1
+  echo "sbxenv.yaml's github command does not run \`devenv secret-get $SECRET_GITHUB\` (SECRET_GITHUB in devenv.conf)"
+}
+
 cmd_host_prepare() {
-  local f mode real
+  local real p t problems
   [ "$(detect_mode)" = sbx ] && die "host-prepare runs on the host, not inside a sandbox"
-  for f in github; do
-    f="$HOME/.config/devenv/secrets/$f"
-    [ -f "$f" ] || die "missing secret file $f (see README: Secrets)"
-    mode=$(stat -c %a "$f")
-    [ "$mode" = 600 ] || die "$f is mode $mode; run: chmod 600 $f"
-    [ "$(stat -c %U "$f")" = "$(id -un)" ] || die "$f is not owned by $(id -un)"
-    [ -s "$f" ] || die "$f is empty"
-  done
+  case "$CLAUDE_AUTH" in token|login) ;; *) die "CLAUDE_AUTH in devenv.conf must be token or login, not '$CLAUDE_AUTH'" ;; esac
   real=$(readlink -f "$DEVENV_ROOT")
   DEVENV_REAL=$real
-  local problems
-  problems=$(checkout_overlap_problems)
-  [ -z "$problems" ] || die "$(head -n 1 <<<"$problems")"
-  local t
+  keyring_unlock_if_locked
+  if p=$(sbxenv_github_command_problem); then die "$p"; fi
   while IFS= read -r t; do
     [ -n "$t" ] || continue
-    case "$t" in "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
-  done <<<"$(github_secret_problems)"
-  ok "secrets and checkout location look right"
+    case "$t" in "ok: "*) ;; "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
+  done < <(secrets_problems)
+  while IFS= read -r t; do
+    [ -n "$t" ] && warn "$t"
+  done < <(secrets_leftovers)
+  problems=$(checkout_overlap_problems)
+  [ -z "$problems" ] || die "$(head -n 1 <<<"$problems")"
+  ok "Infisical secrets and checkout location look right"
   if [ ! -d "$real/dev" ]; then
     mkdir -p "$real/dev"
     ok "created the workspace $real/dev"

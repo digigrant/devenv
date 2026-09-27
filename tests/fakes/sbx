@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake sbx for tests/secrets.sh: logs its argv to $FAKE_LOG/argv and succeeds.
+set -euo pipefail
+printf 'sbx %s\n' "$*" >> "$FAKE_LOG/argv"
+case "${1:-}" in
+  ls) echo '[]' ;;
+esac

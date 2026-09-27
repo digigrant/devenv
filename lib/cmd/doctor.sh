@@ -73,55 +73,8 @@ checkout_overlap_problems() {
   return 0
 }
 
-# Ask GitHub which account the github secret file authenticates as. The token
-# goes to curl through a private header file, never on a command line.
-# Prints "<http-code>\t<login>\t<expiry>" ("-" when unknown).
-github_secret_whoami() {
-  local f=$1 tmp code login exp
-  tmp=$(mktemp -d)
-  chmod 700 "$tmp"
-  printf 'Authorization: token %s\n' "$(tr -d '\r\n' < "$f")" > "$tmp/h"
-  code=$(curl -sS -m 10 -H @"$tmp/h" -D "$tmp/hdr" -o "$tmp/body" -w '%{http_code}' https://api.github.com/user 2>/dev/null) || code=000
-  login=$(sed -n 's/^ *"login": *"\([^"]*\)".*/\1/p' "$tmp/body" 2>/dev/null | head -n 1)
-  exp=$(tr -d '\r' < "$tmp/hdr" 2>/dev/null | sed -n 's/^[Gg]ithub-[Aa]uthentication-[Tt]oken-[Ee]xpiration: *//p' | tail -n 1)
-  rm -rf "$tmp"
-  printf '%s\t%s\t%s\n' "${code:-000}" "${login:--}" "${exp:--}"
-}
-
-# Prints why a Claude setup-token file is unusable and returns 0, or prints
-# nothing and returns 1 when it looks right. Never prints the token.
-claude_token_file_problem() {
-  local f=$1
-  if [ ! -s "$f" ]; then echo "$f is empty"; return 0; fi
-  if [ "$(wc -l < "$f")" -gt 1 ] || tr -d '\n' < "$f" | grep -q '[[:space:]]'; then
-    echo "$f must hold just the token on one line (it has extra lines, spaces or CR characters)"; return 0
-  fi
-  case "$(head -c 14 "$f")" in
-    sk-ant-oat01-*) return 1 ;;
-    sk-ant-api*) echo "$f holds a Console API key, not a \`claude setup-token\` token (sk-ant-oat01-…)"; return 0 ;;
-    *) echo "$f does not look like a \`claude setup-token\` token (sk-ant-oat01-…)"; return 0 ;;
-  esac
-}
-
-# Problems with the github secret file's content or account, one per line.
-# Network trouble is reported with a "warn: " prefix instead.
-github_secret_problems() {
-  local f=$HOME/.config/devenv/secrets/github code login exp
-  [ -s "$f" ] || return 0
-  if [ "$(wc -l < "$f")" -gt 1 ] || tr -d '\n' < "$f" | grep -q '[[:space:]]'; then
-    echo "$f must hold just the token on one line (it has extra lines, spaces or CR characters)"
-  fi
-  IFS=$'\t' read -r code login exp <<<"$(github_secret_whoami "$f")"
-  case "$code" in
-    200) [ "$login" = "$BOT_LOGIN" ] || echo "the github secret authenticates as $login, not $BOT_LOGIN" ;;
-    401) echo "GitHub rejects the github secret (HTTP 401): the token is wrong, revoked or expired" ;;
-    000) echo "warn: could not reach api.github.com to check the github secret" ;;
-    *)   echo "warn: api.github.com answered HTTP $code when checking the github secret" ;;
-  esac
-}
-
 doctor_host() {
-  local v json state f mode owner dirty branch behind
+  local v json state p t dirty branch behind
   DEVENV_REAL=$(readlink -f "$DEVENV_ROOT")
   echo "sbx"
   if ! have sbx; then
@@ -145,39 +98,19 @@ doctor_host() {
     _info "note: this is WSL. Docker supports the Linux sbx inside WSL only \"best-effort\" (docker/sbx-releases#397)."
   fi
 
-  echo "secrets"
-  [ "$(stat -c %a "$HOME/.config/devenv/secrets" 2>/dev/null)" = 700 ] \
-    || _wrn "~/.config/devenv/secrets should be mode 700 (install -d -m 700 ~/.config/devenv/secrets)"
-  local tokf=$HOME/.config/devenv/secrets/anthropic tp
-  case "$CLAUDE_AUTH" in
-    token)
-      if [ ! -f "$tokf" ]; then _fail "$tokf is missing (CLAUDE_AUTH=token needs the \`claude setup-token\` token)"
-      elif [ "$(stat -c %a "$tokf")" != 600 ]; then _fail "$tokf is mode $(stat -c %a "$tokf"); run: chmod 600 $tokf"
-      elif tp=$(claude_token_file_problem "$tokf"); then _fail "$tp"
-      else _pass "$tokf (0600, a setup-token)"; fi
-      ;;
-    login) [ -e "$tokf" ] && _info "$tokf is not used with CLAUDE_AUTH=login; you can delete it" ;;
-    *) _fail "CLAUDE_AUTH in devenv.conf must be token or login" ;;
-  esac
-  for f in github; do
-    f="$HOME/.config/devenv/secrets/$f"
-    if [ ! -f "$f" ]; then _fail "$f is missing"; continue; fi
-    mode=$(stat -c %a "$f"); owner=$(stat -c %U "$f")
-    if [ "$mode" != 600 ]; then _fail "$f is mode $mode; run: chmod 600 $f"
-    elif [ "$owner" != "$(id -un)" ]; then _fail "$f is owned by $owner"
-    elif [ ! -s "$f" ]; then _fail "$f is empty"
-    else _pass "$f (0600)"; fi
+  echo "secrets (Infisical, keyring service $(keyring_service))"
+  for t in jq curl; do
+    have "$t" || _fail "$t is not installed; run: sudo apt-get install -y $t"
   done
-  local gp t gh_code gh_login gh_exp
-  gp=$(github_secret_problems)
-  if [ -z "$gp" ] && [ -s "$HOME/.config/devenv/secrets/github" ]; then
-    IFS=$'\t' read -r gh_code gh_login gh_exp <<<"$(github_secret_whoami "$HOME/.config/devenv/secrets/github")"
-    _pass "github secret authenticates as $gh_login (HTTP $gh_code; expires ${gh_exp/#-/unknown})"
-  fi
+  case "$CLAUDE_AUTH" in token|login) ;; *) _fail "CLAUDE_AUTH in devenv.conf must be token or login" ;; esac
+  if p=$(sbxenv_github_command_problem); then _fail "$p"; else _pass "sbxenv.yaml's github command runs devenv secret-get $SECRET_GITHUB"; fi
   while IFS= read -r t; do
     [ -n "$t" ] || continue
-    case "$t" in "warn: "*) _wrn "${t#warn: }" ;; *) _fail "$t" ;; esac
-  done <<<"$gp"
+    case "$t" in "ok: "*) _pass "${t#ok: }" ;; "warn: "*) _wrn "${t#warn: }" ;; *) _fail "$t" ;; esac
+  done < <(secrets_problems)
+  while IFS= read -r t; do
+    [ -n "$t" ] && _wrn "$t"
+  done < <(secrets_leftovers)
   if [ -n "$ANTHROPIC_TOKEN_EXPIRES" ]; then
     if [ "$(days_until "$ANTHROPIC_TOKEN_EXPIRES" 2>/dev/null || echo -1)" -lt 0 ]; then _fail "anthropic token expired ($ANTHROPIC_TOKEN_EXPIRES)"
     else _pass "anthropic token valid until $ANTHROPIC_TOKEN_EXPIRES"; fi

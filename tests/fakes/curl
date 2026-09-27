@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Fake curl for tests/secrets.sh: answers Infisical's Universal Auth login and
+# single-secret read, and GitHub's /user, with dummy values. Logs its argv to
+# $FAKE_LOG/argv. Like devenv's calls, it expects -w '\n%{http_code}', so it
+# prints the body, a newline and the status code.
+#   FAKE_LOGIN_CODE / FAKE_READ_CODE  force an HTTP status (e.g. 401)
+set -euo pipefail
+printf 'curl %s\n' "$*" >> "$FAKE_LOG/argv"
+url='' config=0 data=0 dump=0 hdr_stdin=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config) [ "$2" = - ] && config=1; shift 2 ;;
+    --data-binary|--data) [ "$2" = @- ] && data=1; shift 2 ;;
+    -H) [ "$2" = @- ] && hdr_stdin=1; shift 2 ;;
+    -D) [ "$2" = - ] && dump=1; shift 2 ;;
+    -w|-X|-m|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+unq() { local s=${1#\"}; s=${s%\"}; s=${s//\\\"/\"}; printf '%s' "${s//\\\\/\\}"; }
+answer() { printf '%s\n%s' "$2" "$1"; exit 0; }
+if [ "$config" = 1 ]; then
+  header=''
+  while IFS= read -r line; do
+    case "$line" in
+      'url = '*) url=$(unq "${line#url = }") ;;
+      'header = '*) header=$(unq "${line#header = }") ;;
+    esac
+  done
+fi
+case "$url" in
+  */api/v1/auth/universal-auth/login)
+    [ "$data" = 1 ] || answer 400 '{"message":"no body on stdin"}'
+    [ -z "${FAKE_LOGIN_CODE:-}" ] || answer "$FAKE_LOGIN_CODE" '{"message":"forced"}'
+    body=$(cat)
+    [ "$(printf '%s' "$body" | jq -r .clientId)" = "$FAKE_CLIENT_ID" ] \
+      && [ "$(printf '%s' "$body" | jq -r .clientSecret)" = "$FAKE_CLIENT_SECRET" ] \
+      || answer 401 '{"message":"Invalid credentials"}'
+    answer 200 "{\"accessToken\":\"$FAKE_ACCESS_TOKEN\",\"expiresIn\":300,\"accessTokenMaxTTL\":300,\"tokenType\":\"Bearer\"}"
+    ;;
+  */api/v4/secrets/*)
+    [ "$config" = 1 ] || answer 400 '{"message":"expected --config -"}'
+    [ -z "${FAKE_READ_CODE:-}" ] || answer "$FAKE_READ_CODE" '{"message":"forced"}'
+    [ "$header" = "Authorization: Bearer $FAKE_ACCESS_TOKEN" ] || answer 401 '{"message":"bad token"}'
+    q=${url#*\?}
+    for want in "projectId=$FAKE_PROJECT_ID" environment=dev secretPath=%2F; do
+      case "&$q&" in *"&$want&"*) ;; *) answer 404 '{"message":"not found"}' ;; esac
+    done
+    name=${url%%\?*}; name=${name##*/}
+    case "$name" in
+      GITHUB_GEJ_MACHINE_PAT) v=$FAKE_GITHUB ;;
+      CLAUDE_CODE_OAUTH_TOKEN) v=$FAKE_CLAUDE ;;
+      *) answer 404 '{"message":"not found"}' ;;
+    esac
+    answer 200 "{\"secret\":{\"secretKey\":\"$name\",\"secretValue\":\"$v\",\"secretValueHidden\":false}}"
+    ;;
+  https://api.github.com/user)
+    [ "$hdr_stdin" = 1 ] || answer 401 '{}'
+    h=$(cat)
+    [ "$h" = "Authorization: token $FAKE_GITHUB" ] || answer 401 '{"message":"Bad credentials"}'
+    [ "$dump" = 1 ] && printf 'HTTP/2 200\r\ngithub-authentication-token-expiration: 2026-12-24 00:00:00 UTC\r\n\r\n'
+    answer 200 '{
+  "login": "gej-machine",
+  "id": 1
+}'
+    ;;
+  *) echo "fake curl: unexpected url $url" >&2; exit 7 ;;
+esac
