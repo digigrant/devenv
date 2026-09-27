@@ -2,7 +2,8 @@
 
 Written 2026-09-26 at the end of the first implementation session; updated
 the same day in session 2, which restructured the sbx layer to Docker's
-layout. Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
+layout, and on 2026-09-27 when the Infisical secrets manager was built
+(branch `fm/devenv-devenv-infisical-secrets-manager-df`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
 [HOST-VERIFY.md](HOST-VERIFY.md).
 
 **SPEC.md is current:** session 2 revised it to the design as built, including
@@ -55,7 +56,9 @@ verified, what is still open, and traps learned along the way.
 - **Tests:** `devenv test` passes after the restructure: status line
   byte-identity, shellcheck, `provision.sh --plain` twice in `ubuntu:24.04`
   and `ubuntu:26.04`, and the simulated sbx create (`tests/sbx-sim.sh`, which
-  now clones devenv from a git copy of the working tree).
+  now clones devenv from a git copy of the working tree). The secrets build
+  added `tests/secrets.sh` (fakes) and `tests/keyring.sh` (a real
+  gnome-keyring in a container); both pass.
 - **Host (owner, WSL2, sbx 0.45.1):** HOST-VERIFY steps 1–5 passed with the
   first layout; some V-checks were run too. The owner confirmed that the first
   mate saw no skills there although `sbx skills ls` listed them. The new
@@ -87,6 +90,10 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Fallbacks removed | V5 `devenv up`, V7 `DEVENV_STAGE_PAYLOAD` | gone | Obsolete with the new layout. |
 | Agents off `main` | owner sets branch rules by hand (D9) | `digigrant/devenv` has an active ruleset (PR with one approval, no force-push or deletion). Not enforced for the fork `digigrant/firstmate`: its ruleset stays disabled so the in-sandbox sync (as gej-machine) works | Owner, session 2: the owner has no `gh` login on the host and doesn't want one; not worth it for the fork. |
 | Setup-token expiry | owner fills in `ANTHROPIC_TOKEN_EXPIRES` | left empty | Owner, session 2: tokens will move to a secrets manager soon. |
+| Secrets (D7) | files readable only by the owner in `~/.config/devenv/secrets/`, read by `cat` commands; "a secrets manager later" | Infisical ([SECRETS.md](SECRETS.md)): the host logs in as the machine identity `sbx-host` with the login kept in the Secret Service keyring (`devenv secrets-init`); sbx runs `devenv secret-get NAME` (REST with `curl`) for the `github` secret and the Claude custom secret; host-prepare unlocks the keyring and checks both fetches | Owner's design, approved 2026-09-27. No secret in a plain-text file, on a command line or in the sandbox. |
+| `secret-get` transport (SECRETS.md S6) | the Infisical CLI if probe P2 showed it writes nothing, else `curl` | `curl`, always | P2 has no result (the owner couldn't find the three values at the time). The REST path meets S6 whatever P2 shows; Firstmate's brief said to build it. |
+| Keyring unlock (SECRETS.md §6.6) | `host-prepare` reads the keyring password on the TTY | the Secret Service's own pop-up window: a `secret-tool lookup` opens it and host-prepare waits up to 3 minutes; devenv never sees the password. No display: stop with instructions | P1: under WSLg both the new-keyring prompt and the unlock prompt are pop-up windows. The hook's timeout is 5 minutes. |
+| Locked-keyring check (SECRETS.md §6.4) | "if the keyring is locked, fail with one line; never prompt" (mechanism open) | the Secret Service's `SearchItems` over D-Bus (`busctl --user`), per entry: unlocked, locked or missing | Checked against gnome-keyring 50 in a container with `dbus-monitor`: `secret-tool lookup` on a locked keyring calls `Unlock` and `Prompt` (the window); `secret-tool search` calls `GetSecret` on every entry; `SearchItems` alone loads nothing and never prompts. `tests/keyring.sh` keeps checking it. |
 | Firstmate's own registration of devenv | entered by hand in each running instance's `data/projects.md` | seeded automatically: `firstmate/data/projects.md` in this repo, copied into `$FM_HOME/data/` by `provision.sh` step 8 whenever the destination file is absent, same contract as the existing `firstmate/config/` seeding | Without this, a fresh sandbox or a wiped Firstmate home came up with devenv unregistered again, requiring the same manual step every time. |
 
 ## Verification status
@@ -154,9 +161,23 @@ it re-clones when a task needs one.
 
 ### 4. Secrets manager (Infisical)
 
-Designed with the owner on 2026-09-27 and approved, not built:
-[SECRETS.md](SECRETS.md). The owner runs HOST-VERIFY §8.1–8.2 (Infisical
-setup, probes P1–P3) first; the build follows SECRETS.md §6 and §8.
+Designed with the owner on 2026-09-27 and built the same day on branch
+`fm/devenv-devenv-infisical-secrets-manager-df` ([SECRETS.md](SECRETS.md) has
+**As built** notes where the build differs from the design). Probes: P1 and P3
+passed; P2 has no result and no longer decides anything (`secret-get` uses
+`curl`). Next, on the host: HOST-VERIFY §8.3 (try the build), §8.4 (cleanup,
+A2, A3, A6) and §8.5 (restart, A4). Things only the host can show:
+
+- whether sbx expanded `${{ env.fileDir }}` in the `github` command
+  (HOST-VERIFY §8.3 step 6; fallback `"$HOME/devenv/bin/devenv"`);
+- that the unlock pop-up opens from the lifecycle hook, and that
+  `secret-get` run by sandboxd fails at once, without a window, while the
+  keyring is locked (§8.3 step 8, §8.5);
+- the real setup-token's length, for the docs' `<n> chars`.
+
+Out of scope, unchanged: typesafe wiring (S10), SECRETS.md §11's exclusions
+and §12's later items. A host with no display can't show the unlock window;
+host-prepare stops with instructions (no such host today).
 
 ## Facts and traps learned
 
@@ -196,6 +217,34 @@ setup, probes P1–P3) first; the build follows SECRETS.md §6 and §8.
   CLI reference YAML in `data/sbx_cli/`. The v2 kit validator is Go code in
   `docker/sbx-kits-contrib/spec` (`LoadFromDirectory` + `ValidateArtifact`);
   `kits/devenv` passes it.
+
+**Secrets (Infisical, gnome-keyring)**
+- Infisical Universal Auth: the Client ID is in the Universal Auth section of
+  the identity's page; the Identity ID (Options, Copy Machine Identity ID) is
+  a different value. **Add Client Secret** shows the secret once. Lockout
+  defaults: 3 failures, 5 minutes, counter reset 30 seconds after the last
+  failure; **Reset All Lockouts** ends one. The project ID is under Project
+  Settings, **Copy Project ID**.
+- The v4 single-secret read is `GET /api/v4/secrets/{name}?projectId=…&environment=…&secretPath=…`;
+  the value is `.secret.secretValue`.
+- `secret-tool store` reads the value from stdin when stdin isn't a
+  terminal. `secret-tool` prints `search` attributes on stderr and secrets on
+  stdout. With no default keyring, the first store makes gnome-keyring prompt
+  for a new keyring password (a window).
+- gnome-keyring matches attributes on a locked collection: `SearchItems`
+  returns the entries in its second ("locked") array. `Lock` over D-Bus needs
+  no prompt. Without a display, the prompter (`gcr-prompter`) exits at once
+  and a lookup on a locked keyring fails immediately rather than hanging.
+- `busctl --user` honours `DBUS_SESSION_BUS_ADDRESS` (and otherwise uses
+  `$XDG_RUNTIME_DIR/bus`); `--json=short` makes its output easy to parse with
+  jq.
+- To watch for prompts in a test, run `dbus-monitor --session
+  "type='method_call',destination='org.freedesktop.secrets'"` and look for
+  `Unlock` and `Prompt`. `script -E never -qefc CMD /dev/null` gives a command
+  a pseudo-terminal for `read -s` prompts fed from a pipe.
+- Never handle a real secret, not even in a test: the tests use dummy values
+  and assert that none appears in a command's arguments or output
+  (`tests/secrets.sh`).
 
 **Claude Code (2.1.282)**
 - Auth precedence: an `apiKeyHelper` or API key outranks
@@ -252,7 +301,10 @@ setup, probes P1–P3) first; the build follows SECRETS.md §6 and §8.
 - `./bin/devenv test` runs everything (~10 min; Docker in the sandbox; test
   containers use `--network host` and the proxy CA).
   `./bin/devenv test --no-containers` takes seconds.
-- shellcheck: `. ./versions.env; docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$TEST_SHELLCHECK_IMAGE" -x provision.sh bin/devenv bin/devenv-entry agents/claude/statusline.sh agents/claude/hooks/memory-link.sh tests/*.sh`
+- shellcheck: `. ./versions.env; docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$TEST_SHELLCHECK_IMAGE" -x provision.sh bin/devenv bin/devenv-entry agents/claude/statusline.sh agents/claude/hooks/memory-link.sh tests/*.sh tests/fakes/*`
+- Host secrets code: `tests/secrets.sh` runs it against fakes in seconds;
+  `tests/keyring.sh` runs it against a real gnome-keyring in a container
+  (about a minute). Neither touches a real keyring, Infisical or sbx.
 - To exercise sbx-mode provisioning in `claude-dev` without touching live
   files, point `HOME`, `WORKSPACE_DIR`, `DEVENV_ENV_FILE`,
   `DEVENV_SYSTEM_PREFIX` and `NPM_CONFIG_PREFIX` at scratch paths.

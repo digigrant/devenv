@@ -3,8 +3,8 @@
 devenv rebuilds the owner's agent sandbox (`sbx` + Firstmate + herdr + Claude
 Code). The current design, and the rules for agents, are in `docs/SPEC.md`
 (read §0 first). Status, open work, and why things changed from the original
-spec: `docs/HANDOFF.md`. Usage: `README.md`. The secrets manager (designed,
-not built yet): `docs/SECRETS.md`.
+spec: `docs/HANDOFF.md`. Usage: `README.md`. The secrets manager (Infisical):
+`docs/SECRETS.md`.
 
 ## Where you are
 
@@ -18,7 +18,9 @@ not built yet): `docs/SECRETS.md`.
 
 The owner's host runs `sbxenv.yaml` (lifecycle hook, secret commands),
 `kits/devenv/spec.yaml`, and the host commands of `bin/devenv`
-(`host-prepare`, `doctor`: `lib/cmd/host-prepare.sh`, `lib/cmd/doctor.sh`).
+(`host-prepare`, `doctor`, `secrets-init`, `secret-get`:
+`lib/cmd/host-prepare.sh`, `lib/cmd/doctor.sh`, `lib/cmd/secrets-init.sh`,
+`lib/secrets.sh`).
 Say so in the PR when you change any of them. Host code must never read or
 run anything from the workspace `dev/`, which the sandbox can write.
 

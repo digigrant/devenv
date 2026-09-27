@@ -61,17 +61,28 @@ have it; step 0 pulled it.)
 
 ## 3. Secrets
 
+The secrets live in Infisical (README: Secrets). Once per machine, store its
+Infisical login in the keyring. §8.1 lists where each of the three values is
+on the Infisical website.
+
 ```sh
-install -d -m 700 ~/.config/devenv/secrets
-(umask 077; cat > ~/.config/devenv/secrets/anthropic)   # paste the `claude setup-token` token, Enter, Ctrl-D
-(umask 077; cat > ~/.config/devenv/secrets/github)      # paste the gej-machine token, Enter, Ctrl-D
-ls -l ~/.config/devenv/secrets
+sudo apt-get install -y jq curl libsecret-tools
+~/devenv/bin/devenv secrets-init
 ```
 
-Expected: two files, `-rw-------`, owned by you. The github secret must be the
-**gej-machine** token (never your personal one). The anthropic file holds the
-setup-token (`sk-ant-oat01-…`); `devenv host-prepare` turns it into a custom
-secret (see V1). (Skip if already done.)
+Expected: `✓ stored project-id`, `✓ stored client-id`, `✓ stored
+client-secret` (or `kept the stored …` where you press Enter), then:
+
+```text
+Test fetch:
+  GITHUB_GEJ_MACHINE_PAT: ok (40 chars, ghp_…)
+  CLAUDE_CODE_OAUTH_TOKEN: ok (<n> chars, sk-ant-oat01-…)
+devenv: ✓ done; the Infisical website tab can be closed
+```
+
+The github secret must be the **gej-machine** token (never your personal
+one); `devenv host-prepare` turns the setup-token into a custom secret (see
+V1). (Skip if already done.)
 
 ## 4. Doctor
 
@@ -79,23 +90,25 @@ secret (see V1). (Skip if already done.)
 ~/devenv/bin/devenv doctor
 ```
 
-Expected: every line `ok`, including `…/secrets/anthropic (0600, a
-setup-token)`, `github secret authenticates as gej-machine (… expires …)` and
+Expected: every line `ok`, including `keyring entries present (service
+devenv-infisical: project-id client-id client-secret)`,
+`GITHUB_GEJ_MACHINE_PAT authenticates as gej-machine (HTTP 200; expires …)`,
+`CLAUDE_CODE_OAUTH_TOKEN is a setup-token (sk-ant-oat01-…)` and
 `not inside any sandbox workspace; only dev/ is shared with the sandbox`,
 except warnings for "ANTHROPIC_TOKEN_EXPIRES is not set" and "on
 initial-setup, not main" (while testing the PR branch); on WSL a note that the
 Linux sbx is "best-effort" there; the operating rule at the end (it now names
 `~/devenv/dev` and `git clean -x`). If GitHub rejects the github secret (HTTP
-401), make a new classic `repo` token for gej-machine and write it to the file
-again. `devenv host-prepare` refuses to create the sandbox until it passes.
+401), make a new classic `repo` token for gej-machine and paste it into
+`GITHUB_GEJ_MACHINE_PAT` on the Infisical website. `devenv host-prepare`
+refuses to create the sandbox until the secrets checks pass.
 
 Also check that doctor refuses unsafe setups (AC13). Each must print a `FAIL`
 line and exit 1:
 
 ```sh
-chmod 644 ~/.config/devenv/secrets/github
-~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
-chmod 600 ~/.config/devenv/secrets/github
+# Pretend this machine has no Infisical login (the real entries stay untouched):
+DEVENV_KEYRING_SERVICE=devenv-missing ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
 
 # Pretend a sandbox mounts your whole home (which contains ~/devenv):
 DEVENV_EXTRA_WORKSPACES=$HOME ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
@@ -104,7 +117,8 @@ DEVENV_EXTRA_WORKSPACES=$HOME ~/devenv/bin/devenv doctor | grep FAIL; echo "exit
 DEVENV_EXTRA_WORKSPACES=$HOME/devenv/lib ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
 ```
 
-Expected: `FAIL … secrets/github is mode 644` with exit=1; then
+Expected: `FAIL keyring entry missing: project-id client-id client-secret
+(service devenv-missing); run: ~/devenv/bin/devenv secrets-init` with exit=1; then
 `FAIL the devenv checkout (/home/<you>/devenv) is inside a sandbox workspace
 (/home/<you>)` with exit=1; then `FAIL a sandbox workspace
 (/home/<you>/devenv/lib) is inside the devenv checkout; only
@@ -131,9 +145,12 @@ cd ~/devenv && sbx env run --kit-arg ref=initial-setup
 ```
 
 Save the whole create output. The `devenv host-prepare` part should include
+`✓ Infisical secrets and checkout location look right`,
 `created the workspace /home/<you>/devenv/dev` (first run only) and end with
 `Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
-(placeholder)`. You should land in herdr, in a workspace named **firstmate**,
+(placeholder)`. If the keyring is locked (after a WSL restart), a pop-up
+window asks for its password first, and host-prepare prints `✓ keyring
+unlocked`. You should land in herdr, in a workspace named **firstmate**,
 with Claude starting in `~/devenv/dev/firstmate`, already signed in.
 
 If it fails with `failed to apply kit to sandbox`, sbx doesn't print the
@@ -356,124 +373,223 @@ existing clone rather than clone it again. AC11 then exercises a PR.
 
 ---
 
+
 ## 8. Secrets manager (Infisical)
 
-The design is [SECRETS.md](SECRETS.md): approved, **not built yet**. Do 8.1 and
-8.2 now, before the build, and paste 8.2's output into the build PR. 8.3 comes
-after the build, and the implementing agent keeps it up to date. Never paste a
-secret value, a client ID, a client secret or a project ID into a PR; every
-command here prints only lengths, shapes, file names or exit codes.
+The design is [SECRETS.md](SECRETS.md); this branch builds it. The order
+follows SECRETS.md §8: the website setup and the probes (done), then trying
+the build, the cleanup, and a restart. Never paste a secret value, a client
+ID, a client secret or a project ID into a PR: every command here prints only
+lengths, shapes, file names or exit codes.
 
-### 8.1 Infisical setup (website)
+While the build's PR is open, check out its branch on the host and build the
+sandbox from it: `git -C ~/devenv fetch && git -C ~/devenv checkout
+fm/devenv-devenv-infisical-secrets-manager-df`, and
+`--kit-arg ref=fm/devenv-devenv-infisical-secrets-manager-df` below.
 
-1. **Create the machine identity.** Organization, then Access Control, then
-   Identities: create `sbx-host` and add **Universal Auth**. Set Access Token
-   TTL and Max TTL to `300` and leave Lockout on.
-2. **Grant it access to one project.** Add `sbx-host` to the agent project (the
-   one holding `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_GEJ_MACHINE_PAT`) with the
-   **Viewer** role, and to no other project.
-3. **Create this machine's client secret.** Name it after the machine, e.g.
-   `wsl-desktop`, with no expiry. Keep the tab open for P2; it shows the secret
-   only once.
+### 8.1 Infisical setup (website, once)
+
+1. **Create the machine identity.** In the organization, **Access Control**,
+   then **Machine Identities**, then **Create**: `sbx-host`, with the most
+   limited organization role (its access comes from the project role in
+   step 2). Add **Universal Auth**: in its Configuration tab set Access Token
+   TTL and Access Token Max TTL to `300`; leave the Lockout tab on (3 failed
+   logins lock it for 5 minutes).
+2. **Grant it one project.** Open the agent project (the one holding
+   `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_GEJ_MACHINE_PAT`), **Access
+   Control**, then **Machine Identities**, then **Add Machine Identity to
+   Project**, **Assign Existing**, `sbx-host`, role **Viewer**. Add it to no
+   other project.
+3. **Create this machine's client secret:** on `sbx-host`'s page, in the
+   **Universal Auth** section, **Add Client Secret**, named after the machine
+   (e.g. `wsl-desktop`), TTL `0` (no expiry). Infisical shows it only once, so
+   keep the tab open until `devenv secrets-init` has stored it.
 4. **Delete `TEST`.**
-5. **Replace the tokens in Infisical,** not on disk (SECRETS.md §8 step 2):
-   paste a new `claude setup-token` token and a new `gej-machine` classic PAT
-   (`repo`, 90 days). Run `clear` after `claude setup-token`. Keep the old
-   files and the old PAT until SECRETS.md §8 step 6.
+5. **Replace both tokens in Infisical,** not on disk (SECRETS.md §8 step 2):
+   paste a new `claude setup-token` token into `CLAUDE_CODE_OAUTH_TOKEN` (then
+   run `clear` in that terminal) and a new `gej-machine` classic PAT (`repo`,
+   90 days) into `GITHUB_GEJ_MACHINE_PAT`. Keep the old files and the old PAT
+   until 8.4.
+
+**The three values `devenv secrets-init` asks for:**
+
+| Value | Where on the website |
+|---|---|
+| Project ID | the agent project, **Project Settings**, **Copy Project ID** |
+| Client ID | `sbx-host`'s page (organization, **Access Control**, **Machine Identities**), **Universal Auth** section, **Client ID**. Not the Identity ID, which is under **Options**, **Copy Machine Identity ID** |
+| Client secret | the same Universal Auth section, **Add Client Secret** (step 3); shown only once |
+
+A wrong value fails the login, and **3 failed logins lock `sbx-host` for 5
+minutes** (the count starts again after 30 seconds without a failure).
+During a lockout even the right values fail, so after a failure fix the value,
+wait 5 minutes, then retry; or end the lockout at once with **Reset All
+Lockouts** in `sbx-host`'s Universal Auth section.
 
 ### 8.2 Probes (before the build)
 
-**P1: the keyring on WSL.**
+Results, from the owner on 2026-09-27 (SECRETS.md §5):
+- **P1 passed.** The first `secret-tool store` asked for the new keyring's
+  password in a pop-up window, not the terminal. After `wsl --shutdown` the
+  keyring is locked, and the next lookup opened a pop-up asking to unlock it.
+- **P3 passed** as is, without setting `DBUS_SESSION_BUS_ADDRESS`.
+- **P2 has no result.** `secret-get` uses `curl` instead of the Infisical CLI,
+  which meets SECRETS.md S6 whatever P2 shows. A later run is informational:
+  after 8.3 step 2 has stored the keyring entries,
+
+  ```sh
+  m=$(mktemp)
+  (
+    INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=$(secret-tool lookup service devenv-infisical key client-id)
+    INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=$(secret-tool lookup service devenv-infisical key client-secret)
+    export INFISICAL_UNIVERSAL_AUTH_CLIENT_ID INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET
+    INFISICAL_TOKEN=$(infisical login --method=universal-auth --silent --plain) || { echo "sbx-host login failed"; exit 1; }
+    export INFISICAL_TOKEN
+    infisical secrets get GITHUB_GEJ_MACHINE_PAT --silent --plain --env dev --path / \
+      --projectId "$(secret-tool lookup service devenv-infisical key project-id)" | wc -c
+  )
+  find ~ /tmp -xdev -newer "$m" -type f 2>/dev/null \
+    | grep -vE "^$HOME/(devenv/dev|\.local/state/sandboxes)/|^/tmp/(tmp\.|claude-)" | head -n 30
+  rm -f "$m"
+  ```
+
+  Report the count (41) and whether the `find` list shows anything under
+  `~/.infisical/` or `~/infisical-keyring/`.
+
+### 8.3 Try the build
+
+1. **Prerequisites:**
+   ```sh
+   sudo apt-get install -y jq curl libsecret-tools
+   command -v secret-tool busctl jq curl
+   ```
+   Expected: four paths (`busctl` comes with systemd).
+
+2. **Store the keyring entries** (8.1 lists where each value is):
+   ```sh
+   ~/devenv/bin/devenv secrets-init
+   ```
+   Expected, with values you paste (Enter keeps an entry that already exists,
+   e.g. from P2):
+   ```text
+   devenv: storing this machine's Infisical login in the keyring (service devenv-infisical)
+   devenv: paste each value from the Infisical website; nothing is shown as you paste
+   Project ID (the agent project: Project Settings):
+   devenv: ✓ stored project-id
+   Client ID (sbx-host identity, Universal Auth; not the Identity ID):
+   devenv: ✓ stored client-id
+   Client secret (sbx-host identity, Universal Auth, Add Client Secret):
+   devenv: ✓ stored client-secret
+   Test fetch:
+     GITHUB_GEJ_MACHINE_PAT: ok (40 chars, ghp_…)
+     CLAUDE_CODE_OAUTH_TOKEN: ok (<n> chars, sk-ant-oat01-…)
+   devenv: ✓ done; the Infisical website tab can be closed
+   ```
+   A failure prints `FAILED:` with the reason (e.g. `Infisical rejected the
+   sbx-host login (HTTP 401): …`) and stops after that one login. Mind the
+   lockout (8.1) before retrying.
+
+3. **Doctor** (A5):
+   ```sh
+   ~/devenv/bin/devenv doctor | sed -n '/^secrets/,/^devenv checkout/p'
+   DEVENV_KEYRING_SERVICE=devenv-missing ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"
+   ```
+   Expected, first command:
+   ```text
+   secrets (Infisical, keyring service devenv-infisical)
+     ok    sbxenv.yaml's github command runs devenv secret-get GITHUB_GEJ_MACHINE_PAT
+     ok    keyring entries present (service devenv-infisical: project-id client-id client-secret)
+     ok    GITHUB_GEJ_MACHINE_PAT authenticates as gej-machine (HTTP 200; expires …)
+     ok    CLAUDE_CODE_OAUTH_TOKEN is a setup-token (sk-ant-oat01-…)
+     warn  plain-text secret files left over in /home/<you>/.config/devenv/secrets; delete them (docs/SECRETS.md S13)
+     warn  Infisical CLI backups left over in /home/<you>/.infisical/secrets-backup; delete them and run infisical logout (docs/SECRETS.md S13)
+     warn  ANTHROPIC_TOKEN_EXPIRES is not set in devenv.conf (setup-token expiry unknown)
+   ```
+   (The leftover warnings, where they show, go away in 8.4.) Second command:
+   `FAIL  keyring entry missing: project-id client-id client-secret (service
+   devenv-missing); run: ~/devenv/bin/devenv secrets-init` and `exit=1`.
+
+4. **`secret-get`'s contract**, showing only lengths and exit codes:
+   ```sh
+   ~/devenv/bin/devenv secret-get GITHUB_GEJ_MACHINE_PAT | wc -c
+   ~/devenv/bin/devenv secret-get TEST; echo "exit=$?"
+   ```
+   Expected: `41` (the token and a newline); then `devenv: error:
+   secret-get fetches only GITHUB_GEJ_MACHINE_PAT and CLAUDE_CODE_OAUTH_TOKEN
+   (devenv.conf), not 'TEST'` and `exit=1`.
+
+5. **Rebuild with the branch** (the `github` command only changes at create):
+   ```sh
+   cd ~/devenv && sbx env rm
+   cd ~/devenv && sbx env run --kit-arg ref=fm/devenv-devenv-infisical-secrets-manager-df
+   ```
+   Expected in the `devenv host-prepare` part: the leftover warnings,
+   `✓ Infisical secrets and checkout location look right`, and
+   `✓ Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
+   (placeholder)`. You land in herdr as before.
+
+6. **What sbx stored** (SPEC §10 invariant 12, and whether sbx expanded
+   `${{ env.fileDir }}` in the `github` command):
+   ```sh
+   jq -c '.. | objects | select(.type? == "command") | {source, refresh}' \
+     ~/.local/state/sandboxes/sandboxes/sandboxd/runtimes/dev.json
+   ```
+   Expected: `{"source":"\"/home/<you>/devenv/bin/devenv\" secret-get
+   GITHUB_GEJ_MACHINE_PAT","refresh":"55m"}` (and, if sbx records it there,
+   the Claude custom secret with `…/devenv/bin/devenv secret-get
+   CLAUDE_CODE_OAUTH_TOKEN`). Only paths and names, never a value. If the
+   source still contains the literal `${{ env.fileDir }}`, report it: the
+   fallback is `"$HOME/devenv/bin/devenv"` in `sbxenv.yaml` (SECRETS.md §6.5).
+
+7. **A1: the sandbox holds only placeholders** **(in sandbox)**:
+   ```sh
+   for v in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN; do printf '%s=%s…\n' "$v" "$(printenv "$v" | cut -c1-8)"; done
+   gh api user --jq .login                           # gej-machine
+   claude auth status | head -n 4                    # "authMethod": "oauth_token"
+   claude -p "reply with the single word ok" < /dev/null   # ok
+   ```
+   Expected: sbx placeholders (`gho_sbxp…` or similar for GitHub,
+   `sbx-cs-d…` for Claude), never a real `ghp_` or `sk-ant-oat01-` value;
+   `gej-machine`; `oauth_token`; `ok`.
+
+8. **A locked keyring, without a restart** (the pop-up and the never-prompt
+   rule). Lock the default keyring, then fetch:
+   ```sh
+   kr=$(busctl --user --json=short call org.freedesktop.secrets /org/freedesktop/secrets \
+          org.freedesktop.Secret.Service ReadAlias s default | jq -r '.data[0]')
+   busctl --user call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service Lock ao 1 "$kr"
+   time ~/devenv/bin/devenv secret-get GITHUB_GEJ_MACHINE_PAT; echo "exit=$?"
+   ```
+   Expected: `devenv: error: keyring locked; run sbx env run (host-prepare
+   unlocks it)` and `exit=1` within a second, and **no pop-up window**. Then:
+   ```sh
+   cd ~/devenv && sbx env run --kit-arg ref=fm/devenv-devenv-infisical-secrets-manager-df
+   ```
+   Expected: `devenv: the keyring is locked (as after every restart): a window
+   asks for the keyring password now`, a pop-up asking for the keyring
+   password; after you type it, `✓ keyring unlocked`, the other host-prepare
+   lines, and herdr. Report where the window appeared.
+
+### 8.4 Clean up (SECRETS.md §8 step 6)
+
+Once 8.3 passes:
 
 ```sh
-sudo apt-get install -y libsecret-tools
-secret-tool store --label='devenv probe' service devenv-probe key test   # type any throwaway text, Enter
-secret-tool lookup service devenv-probe key test | wc -c; echo "exit=${PIPESTATUS[0]}"
+rm -rf ~/.config/devenv/secrets
+rm -rf ~/.infisical/secrets-backup && infisical logout   # skip `infisical logout` if the CLI isn't installed
+~/devenv/bin/devenv doctor | grep -iE 'left over|FAIL'; echo "(end)"
 ```
 
-Expected: a count above 0 and `exit=0`. The first `store` may ask you to
-create a keyring and choose its password, in a terminal prompt or in a window.
-Report which, and use a real password. Then restart WSL (`wsl --shutdown` in
-PowerShell), open a new WSL terminal and run the `lookup` line again. Report
-whether it printed, prompted (where), or failed and with what message. Keep the
-probe entry for P3.
+Also revoke the old `gej-machine` PAT in gej-machine's GitHub settings
+(Developer settings, Personal access tokens). Expected: only `(end)`.
 
-**P3: sbx can run a command that reads the keyring.** `groq` is only a spare
-service name for this test; nothing uses it.
-
+**A3: a rebuild needs only the keyring:**
 ```sh
-sbx secret set groq --sandbox dev --show-error --command 'secret-tool lookup service devenv-probe key test' 2>&1 | tail -n 3
-sbx secret rm groq --sandbox dev -f
+cd ~/devenv && sbx env rm && sbx env run --kit-arg ref=fm/devenv-devenv-infisical-secrets-manager-df
 ```
+Expected: a working `dev` as in 8.3 step 5, then A1 (8.3 step 7) again.
 
-Expected: `Saved command secret for service "groq" …`. If it fails instead,
-run it again with the bus set inside the command, and report both outputs:
-
-```sh
-sbx secret set groq --sandbox dev --show-error \
-  --command 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus secret-tool lookup service devenv-probe key test' 2>&1 | tail -n 3
-sbx secret rm groq --sandbox dev -f
-secret-tool clear service devenv-probe key test
-```
-
-(If the first attempt passed, still run the last line to remove the probe entry.)
-
-**P2: does the Infisical CLI write files when logged in as `sbx-host`?**
-First store the three keyring entries. These are the same ones
-`devenv secrets-init` will manage later, so keep them. Each `store` prompts;
-paste from the website tab.
-
-```sh
-secret-tool store --label='devenv Infisical project ID'    service devenv-infisical key project-id
-secret-tool store --label='devenv Infisical client ID'     service devenv-infisical key client-id
-secret-tool store --label='devenv Infisical client secret' service devenv-infisical key client-secret
-```
-
-Then fetch once and list every file that changed:
-
-```sh
-m=$(mktemp)
-(
-  INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=$(secret-tool lookup service devenv-infisical key client-id)
-  INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=$(secret-tool lookup service devenv-infisical key client-secret)
-  export INFISICAL_UNIVERSAL_AUTH_CLIENT_ID INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET
-  INFISICAL_TOKEN=$(infisical login --method=universal-auth --silent --plain) || { echo "sbx-host login failed"; exit 1; }
-  export INFISICAL_TOKEN
-  infisical secrets get GITHUB_GEJ_MACHINE_PAT --silent --plain --env dev --path / \
-    --projectId "$(secret-tool lookup service devenv-infisical key project-id)" | wc -c
-)
-find ~ /tmp -xdev -newer "$m" -type f 2>/dev/null \
-  | grep -vE "^$HOME/(devenv/dev|\.local/state/sandboxes)/|^/tmp/(tmp\.|claude-)" | head -n 30
-rm -f "$m"
-```
-
-Expected: a count of 41 (a 40-character token plus a newline). Report the
-`find` list; the question is whether anything under `~/.infisical/` or
-`~/infisical-keyring/` appears (SECRETS.md S6). If it prints
-`sbx-host login failed`, stop and report it. Don't let the fetch fall back to
-your own login, which would test the wrong thing.
-
-### 8.3 After the build
-
-The implementing agent fills in exact expected output. The acceptance items
-are in SECRETS.md §9.
-
-```sh
-~/devenv/bin/devenv secrets-init                  # prompts; ok per secret (lengths and shapes only)
-cd ~/devenv && sbx env rm && sbx env run --kit-arg ref=<branch>
-~/devenv/bin/devenv doctor                        # all ok (A5)
-DEVENV_KEYRING_SERVICE=devenv-missing ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"   # exit=1
-```
-
-**(in sandbox)**, A1:
-```sh
-for v in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN; do printf '%s=%s…\n' "$v" "$(printenv "$v" | cut -c1-8)"; done
-gh api user --jq .login                           # gej-machine
-claude auth status | head -n 4                    # "authMethod": "oauth_token"
-```
-
-A2, after SECRETS.md §8 step 6 (the cleanup). Each value goes to `grep` on
-stdin, and only file names print:
+**A2: no plain-text copy.** Each value goes to `grep` on stdin, and only file
+names print (this reads a lot of files and can take a few minutes):
 
 ```sh
 for n in GITHUB_GEJ_MACHINE_PAT CLAUDE_CODE_OAUTH_TOKEN; do
@@ -485,11 +601,38 @@ done
 
 Expected: `(end)` right after each name.
 
-A6: the identity details aren't in the repo.
+**A6: the identity details aren't in the repo:**
 
 ```sh
 for k in project-id client-id; do secret-tool lookup service devenv-infisical key "$k" | git -C ~/devenv grep -qF -f -; echo "$k in repo: exit=$? (1 = not found)"; done
 ```
 
-A4: restart WSL, run `sbx env run` (one keyring prompt), and check A1 again
-more than an hour later.
+Expected: `exit=1` for both.
+
+### 8.5 After a WSL restart, and past the refresh (A4)
+
+1. `wsl --shutdown` in PowerShell, then open a new WSL terminal.
+2. Doctor never prompts:
+   ```sh
+   ~/devenv/bin/devenv doctor | grep -i keyring
+   ```
+   Expected: `FAIL  keyring locked; run sbx env run (host-prepare unlocks it)`
+   and no window.
+3. `cd ~/devenv && sbx env run --kit-arg ref=fm/devenv-devenv-infisical-secrets-manager-df`:
+   one pop-up asks for the keyring password; then `✓ keyring unlocked`, and
+   you land in herdr.
+4. More than an hour later (past sbx's 55-minute refresh), **(in sandbox)**
+   `gh api user --jq .login` answers `gej-machine` and
+   `claude -p "reply with the single word ok" < /dev/null` answers `ok`.
+
+### 8.6 Acceptance (SECRETS.md §9)
+
+| Item | Where | Expected |
+|---|---|---|
+| A1 | 8.3 step 7 | placeholders only; `gej-machine`; `oauth_token` |
+| A2 | 8.4 | `(end)` after each name |
+| A3 | 8.4 | the rebuild works with no secret files |
+| A4 | 8.5 | one keyring prompt after a restart; fetches still work after an hour |
+| A5 | 8.3 step 3, 8.4 | all `ok` with no leftover warnings; FAIL and exit 1 with `DEVENV_KEYRING_SERVICE=devenv-missing` |
+| A6 | 8.4 | `exit=1` for both |
+| A7 | the PR (code review) | no secret or identity detail as an argument in `secret-get`, `secrets-init`, `host-prepare` or `doctor` |

@@ -113,12 +113,13 @@ keyring_unlock_if_locked() {
   k=$(keyring_locked_key)
   [ -n "$k" ] || return 0
   log "the keyring is locked (as after every restart): a window asks for the keyring password now"
-  timeout 300 secret-tool lookup service "$(keyring_service)" key "$k" >/dev/null 2>&1 </dev/null || true
+  # 3 minutes, well inside the lifecycle hook's 5-minute timeout (sbxenv.yaml).
+  timeout 180 secret-tool lookup service "$(keyring_service)" key "$k" >/dev/null 2>&1 </dev/null || true
   if [ -z "$(keyring_locked_key)" ]; then ok "keyring unlocked"; return 0; fi
   if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     die "the keyring is locked and no window can ask for its password here (no DISPLAY or WAYLAND_DISPLAY); run sbx env run in a terminal that can open windows (WSLg or a desktop session)"
   fi
-  die "the keyring is still locked (the password window was closed or timed out); run sbx env run again"
+  die "the keyring is still locked (the password window was closed, or not answered within 3 minutes); run sbx env run again"
 }
 
 # keyring_read KEY: prints the entry's value. Only after keyring_problem said
