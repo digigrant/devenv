@@ -348,9 +348,9 @@ when herdr is bumped past the version it was tested with.
 
 ## Roadmap (not built yet)
 
-- A secrets manager for the setup-token and the GitHub token: swap the
-  `command:` lines in `sbxenv.yaml` for `ref: op://…` (and `host-prepare`'s
-  custom-secret command).
+- Infisical as the secrets manager for the setup-token and the GitHub token,
+  so no secret sits in a file on the host: designed in
+  [docs/SECRETS.md](docs/SECRETS.md), not built yet.
 - A GitHub permission system for agents: rulesets or a bot bypass list, or a
   GitHub App with short-lived tokens through `secrets.github.command` plus
   `refresh`.

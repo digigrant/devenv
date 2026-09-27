@@ -353,3 +353,143 @@ existing clone rather than clone it again. AC11 then exercises a PR.
 | AC9 | already verified in the sandbox by the agent (PR description) | — |
 | AC10 | V6 | as in V6 |
 | AC11 | **(in sandbox)** `git config --global user.name; git config --global user.email; gh api user --jq .login` | `gej-machine`, `318032932+gej-machine@users.noreply.github.com`, `gej-machine`. Optionally ask the first mate for a throwaway draft PR on devenv (after "Projects" above) to confirm a worker's push and `gh pr create`, then close it |
+
+---
+
+## 8. Secrets manager (Infisical)
+
+The design is [SECRETS.md](SECRETS.md): approved, **not built yet**. Do 8.1 and
+8.2 now, before the build, and paste 8.2's output into the build PR. 8.3 comes
+after the build, and the implementing agent keeps it up to date. Never paste a
+secret value, a client ID, a client secret or a project ID into a PR; every
+command here prints only lengths, shapes, file names or exit codes.
+
+### 8.1 Infisical setup (website)
+
+1. **Create the machine identity.** Organization, then Access Control, then
+   Identities: create `sbx-host` and add **Universal Auth**. Set Access Token
+   TTL and Max TTL to `300` and leave Lockout on.
+2. **Grant it access to one project.** Add `sbx-host` to the agent project (the
+   one holding `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_GEJ_MACHINE_PAT`) with the
+   **Viewer** role, and to no other project.
+3. **Create this machine's client secret.** Name it after the machine, e.g.
+   `wsl-desktop`, with no expiry. Keep the tab open for P2; it shows the secret
+   only once.
+4. **Delete `TEST`.**
+5. **Replace the tokens in Infisical,** not on disk (SECRETS.md §8 step 2):
+   paste a new `claude setup-token` token and a new `gej-machine` classic PAT
+   (`repo`, 90 days). Run `clear` after `claude setup-token`. Keep the old
+   files and the old PAT until SECRETS.md §8 step 6.
+
+### 8.2 Probes (before the build)
+
+**P1: the keyring on WSL.**
+
+```sh
+sudo apt-get install -y libsecret-tools
+secret-tool store --label='devenv probe' service devenv-probe key test   # type any throwaway text, Enter
+secret-tool lookup service devenv-probe key test | wc -c; echo "exit=${PIPESTATUS[0]}"
+```
+
+Expected: a count above 0 and `exit=0`. The first `store` may ask you to
+create a keyring and choose its password, in a terminal prompt or in a window.
+Report which, and use a real password. Then restart WSL (`wsl --shutdown` in
+PowerShell), open a new WSL terminal and run the `lookup` line again. Report
+whether it printed, prompted (where), or failed and with what message. Keep the
+probe entry for P3.
+
+**P3: sbx can run a command that reads the keyring.** `groq` is only a spare
+service name for this test; nothing uses it.
+
+```sh
+sbx secret set groq --sandbox dev --show-error --command 'secret-tool lookup service devenv-probe key test' 2>&1 | tail -n 3
+sbx secret rm groq --sandbox dev -f
+```
+
+Expected: `Saved command secret for service "groq" …`. If it fails instead,
+run it again with the bus set inside the command, and report both outputs:
+
+```sh
+sbx secret set groq --sandbox dev --show-error \
+  --command 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus secret-tool lookup service devenv-probe key test' 2>&1 | tail -n 3
+sbx secret rm groq --sandbox dev -f
+secret-tool clear service devenv-probe key test
+```
+
+(If the first attempt passed, still run the last line to remove the probe entry.)
+
+**P2: does the Infisical CLI write files when logged in as `sbx-host`?**
+First store the three keyring entries. These are the same ones
+`devenv secrets-init` will manage later, so keep them. Each `store` prompts;
+paste from the website tab.
+
+```sh
+secret-tool store --label='devenv Infisical project ID'    service devenv-infisical key project-id
+secret-tool store --label='devenv Infisical client ID'     service devenv-infisical key client-id
+secret-tool store --label='devenv Infisical client secret' service devenv-infisical key client-secret
+```
+
+Then fetch once and list every file that changed:
+
+```sh
+m=$(mktemp)
+(
+  INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=$(secret-tool lookup service devenv-infisical key client-id)
+  INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=$(secret-tool lookup service devenv-infisical key client-secret)
+  export INFISICAL_UNIVERSAL_AUTH_CLIENT_ID INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET
+  INFISICAL_TOKEN=$(infisical login --method=universal-auth --silent --plain) || { echo "sbx-host login failed"; exit 1; }
+  export INFISICAL_TOKEN
+  infisical secrets get GITHUB_GEJ_MACHINE_PAT --silent --plain --env dev --path / \
+    --projectId "$(secret-tool lookup service devenv-infisical key project-id)" | wc -c
+)
+find ~ /tmp -xdev -newer "$m" -type f 2>/dev/null \
+  | grep -vE "^$HOME/(devenv/dev|\.local/state/sandboxes)/|^/tmp/(tmp\.|claude-)" | head -n 30
+rm -f "$m"
+```
+
+Expected: a count of 41 (a 40-character token plus a newline). Report the
+`find` list; the question is whether anything under `~/.infisical/` or
+`~/infisical-keyring/` appears (SECRETS.md S6). If it prints
+`sbx-host login failed`, stop and report it. Don't let the fetch fall back to
+your own login, which would test the wrong thing.
+
+### 8.3 After the build
+
+The implementing agent fills in exact expected output. The acceptance items
+are in SECRETS.md §9.
+
+```sh
+~/devenv/bin/devenv secrets-init                  # prompts; ok per secret (lengths and shapes only)
+cd ~/devenv && sbx env rm && sbx env run --kit-arg ref=<branch>
+~/devenv/bin/devenv doctor                        # all ok (A5)
+DEVENV_KEYRING_SERVICE=devenv-missing ~/devenv/bin/devenv doctor | grep FAIL; echo "exit=${PIPESTATUS[0]}"   # exit=1
+```
+
+**(in sandbox)**, A1:
+```sh
+for v in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN; do printf '%s=%s…\n' "$v" "$(printenv "$v" | cut -c1-8)"; done
+gh api user --jq .login                           # gej-machine
+claude auth status | head -n 4                    # "authMethod": "oauth_token"
+```
+
+A2, after SECRETS.md §8 step 6 (the cleanup). Each value goes to `grep` on
+stdin, and only file names print:
+
+```sh
+for n in GITHUB_GEJ_MACHINE_PAT CLAUDE_CODE_OAUTH_TOKEN; do
+  printf '%s: ' "$n"
+  ~/devenv/bin/devenv secret-get "$n" | grep -rlF -f - ~/.config ~/.local ~/.cache ~/.infisical ~/devenv /tmp 2>/dev/null | head -n 3 | tr '\n' ' '
+  echo "(end)"
+done
+```
+
+Expected: `(end)` right after each name.
+
+A6: the identity details aren't in the repo.
+
+```sh
+for k in project-id client-id; do secret-tool lookup service devenv-infisical key "$k" | git -C ~/devenv grep -qF -f -; echo "$k in repo: exit=$? (1 = not found)"; done
+```
+
+A4: restart WSL, run `sbx env run` (one keyring prompt), and check A1 again
+more than an hour later.

@@ -3,7 +3,8 @@
 devenv rebuilds the owner's agent sandbox (`sbx` + Firstmate + herdr + Claude
 Code). The current design, and the rules for agents, are in `docs/SPEC.md`
 (read §0 first). Status, open work, and why things changed from the original
-spec: `docs/HANDOFF.md`. Usage: `README.md`.
+spec: `docs/HANDOFF.md`. Usage: `README.md`. The secrets manager (designed,
+not built yet): `docs/SECRETS.md`.
 
 ## Where you are
 

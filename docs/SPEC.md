@@ -41,7 +41,7 @@ The environment runs **Firstmate** (an agent orchestrator) on the **herdr** back
 
 ### Out of scope (do not build)
 - A GitHub permission system for agents. That is future work; Firstmate's merge rule covers it for now.
-- A secrets manager. Keep secret sources swappable, one line each (§6.9). (Planned next; see §11.)
+- A secrets manager, except as designed in [SECRETS.md](SECRETS.md) (approved 2026-09-27, not built yet). Until it lands, secret sources stay swappable, one line each (§6.9).
 - CI or GitHub Actions, Renovate, or auto-bump PRs.
 - The Windows `sbx.exe` path. Only the Linux `sbx` (inside WSL or native) is supported.
 - tmux, or any Firstmate backend other than herdr.
@@ -551,7 +551,7 @@ It detects where it's running and exits 1 when any check fails.
 
 ## 11. Future work (don't build now; noted in the README "Roadmap")
 
-- A secrets manager for the setup-token and the GitHub token: swap the `command:` lines for `ref: op://…` (and `host-prepare`'s custom-secret command).
+- The secrets manager: Infisical, designed in [SECRETS.md](SECRETS.md). Build it from there; it updates this spec (SECRETS.md §6.8).
 - A GitHub permission system for agents: rulesets or a bot bypass list, or a GitHub App with short-lived tokens through `secrets.github.command` plus `refresh`. Keeping agents off the fork's `main` would need the fork sync to run with the owner's credential.
 - Worker effort and model profiles in Firstmate's `config/crew-dispatch.json`.
 - A second worker harness (e.g. Codex), which needs `config/crew-harness` and its install.

@@ -152,6 +152,12 @@ it re-clones when a task needs one.
   has verified ≤ 0.8.0) and treehouse 3.0.0 (major bump). `devenv bump --list`
   shows them.
 
+### 4. Secrets manager (Infisical)
+
+Designed with the owner on 2026-09-27 and approved, not built:
+[SECRETS.md](SECRETS.md). The owner runs HOST-VERIFY §8.1–8.2 (Infisical
+setup, probes P1–P3) first; the build follows SECRETS.md §6 and §8.
+
 ## Facts and traps learned
 
 **sbx (0.45.1)**
