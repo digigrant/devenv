@@ -162,7 +162,8 @@ it re-clones when a task needs one.
 ### 4. Secrets manager (Infisical)
 
 Designed with the owner on 2026-09-27 and built the same day on branch
-`fm/devenv-devenv-infisical-secrets-manager-df` ([SECRETS.md](SECRETS.md) has
+`fm/devenv-devenv-infisical-secrets-manager-df`, PR
+https://github.com/digigrant/devenv/pull/5 ([SECRETS.md](SECRETS.md) has
 **As built** notes where the build differs from the design). Probes: P1 and P3
 passed; P2 has no result and no longer decides anything (`secret-get` uses
 `curl`). Next, on the host: HOST-VERIFY §8.3 (try the build), §8.4 (cleanup,

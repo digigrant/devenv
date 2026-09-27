@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design approved by the owner on 2026-09-27. **Built** on 2026-09-27 (branch `fm/devenv-devenv-infisical-secrets-manager-df`); host verification (HOST-VERIFY §8.3 onward) pending. It replaced D7's plain-text secret files; SPEC.md now describes the result. Where the build differs from this text, an **As built** note says so. |
+| **Status** | Design approved by the owner on 2026-09-27. **Built** on 2026-09-27 (branch `fm/devenv-devenv-infisical-secrets-manager-df`, PR https://github.com/digigrant/devenv/pull/5); host verification (HOST-VERIFY §8.3 onward) pending. It replaced D7's plain-text secret files; SPEC.md now describes the result. Where the build differs from this text, an **As built** note says so. |
 | **Written** | 2026-09-27, from a design interview with the owner, with facts checked on the owner's host |
 | **Readers** | The agent implementing it (§6), and the owner (§7, §8) |
 | **Researched against** | sbx v0.45.1, Infisical CLI 0.43.137, Infisical Cloud (US), Ubuntu 26.04 on WSL2 |
