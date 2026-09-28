@@ -20,6 +20,7 @@ if [ "${1:-}" != --user ]; then
   cp -r /src/devenv /home/tester/devenv
   rm -rf /home/tester/devenv/dev
   chown -R tester: /home/tester/devenv
+  # shellcheck source=/dev/null
   echo "container: $(. /etc/os-release && echo "$PRETTY_NAME"), $(dpkg-query -W -f='gnome-keyring ${Version}, libsecret-tools ${Version}' gnome-keyring 2>/dev/null | cut -d, -f1), secret-tool $(dpkg-query -W -f='${Version}' libsecret-tools), busctl $(busctl --version | head -n 1 | cut -d' ' -f2)"
   # dbus-daemon and the prompter log to stderr; drop those lines.
   su tester -c 'env -u DISPLAY -u WAYLAND_DISPLAY dbus-run-session -- bash ~/devenv/tests/keyring-inner.sh --user' 2>&1 \

@@ -23,7 +23,7 @@ Move the Claude setup-token and the `gej-machine` GitHub token out of the plain-
 - **Agents see only placeholders.** Inside the sandbox there is no secret value, no Infisical token, certificate or CLI. sbx's proxy swaps in the real value on the way out, as it does today.
 - **No secret value is written to disk in plain text,** passed on a command line, or left in shell history, on the host or in the sandbox. The single exception is §4 S5: each host keeps its one Infisical login in the OS secret store.
 - **Reproducible on any Linux host.** A new machine needs one browser step (creating its client secret) and one command (`devenv secrets-init`). §7 walks through it.
-- **Rotating a token is one paste** into the Infisical website. Every machine picks it up within 55 minutes.
+- **Rotating a token is one paste** into the Infisical website. Every machine picks it up within 55 minutes (the refresh, S7).
 
 ## 2. Threat model
 
@@ -38,7 +38,7 @@ Hiding a value doesn't stop misuse. sbx attaches the GitHub token to every reque
   - age-encrypted in `~/.config/com.docker.sandboxes/…/secretpass`;
   - in plain text in `~/.local/state/sandboxes/sandboxes/sandboxd/runtimes/<sandbox>.json`, under `Spec/Credentials/Sources/<name>/source`.
 
-  **So a command must never contain a secret.** Resolved values live in sandboxd's memory and are refreshed according to `--refresh` (default `55m`).
+  **So a command must never contain a secret.** Resolved values live in sandboxd's memory and are refreshed according to `--refresh` (default `55m` for a service secret, but `on-demand`, every use, for a custom secret: checked on the host with `sbx secret ls --json` on 2026-09-28).
 - **`sbxenv.yaml` `secrets.<service>.command` is stored the same way:** the running `dev` sandbox records `github` as `{type: command, source: cat "$HOME/.config/devenv/secrets/github", refresh: 55m}`.
 - **Command sources run from a temporary directory on the host** (SPEC §2.2), so they need absolute paths. sbx's own note: "Put any required environment variables directly in the command or wrapper script."
 - **The daemon can probably reach the keyring.** sandboxd (`sbx daemon start`) has `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR` and `WSL_INTEROP` in its environment, so a command it runs should reach the Secret Service. Probe P3 confirms this.
@@ -76,7 +76,7 @@ Hiding a value doesn't stop misuse. sbx attaches the GitHub token to every reque
 | S4 | **The host logs in as the machine identity `sbx-host`** (Universal Auth), a **Viewer** on that project and nothing else. **One client secret per machine,** named after it (e.g. `wsl-desktop`, `linux-grant`). Client secrets never expire; the owner revokes a machine's secret when it is retired or lost. **Access tokens:** TTL and max TTL of 300 seconds; lockout left on. **No periodic tokens:** they still need something stored, add a renewal process, and die if a machine is off longer than the period, which means a new client secret from the website. |
 | S5 | **Secret zero lives in the Secret Service.** The client ID, client secret and project ID are stored with `secret-tool` on every host (Linux only). None of them go in the repo, because the client ID alone lets anyone lock the identity out (§3). On a Linux desktop the keyring unlocks at login. On WSL or a headless host, `host-prepare` asks for the keyring password once per boot. |
 | S6 | **A fetch leaves nothing behind.** `devenv secret-get NAME` prints one value on stdout. It writes no file, puts no secret on a command line, and discards its access token. It uses the Infisical CLI only if probe P2 shows that the CLI writes nothing under a machine identity; otherwise it calls the REST API with `curl`, once to log in and once to read the secret. Every fetch logs in fresh. |
-| S7 | **Cache:** sbx's default `55m` refresh. Resolved values live only in sandboxd's memory. |
+| S7 | **Cache:** sbx's default `55m` refresh. Resolved values live only in sandboxd's memory. **As built (2026-09-28):** a custom secret's default is `on-demand`, so the Claude secret was fetched on every use. The owner made the refresh configurable: `SECRET_REFRESH` in `devenv.conf` (default `55m`) for every secret from Infisical, overridden per secret by `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`; `host-prepare` passes the Claude one to `set-custom --refresh`. |
 | S8 | **Claude:** unchanged mechanism (SPEC D8). The setup-token stays the `CLAUDE_CODE_OAUTH_TOKEN` custom secret for `api.anthropic.com`, set by `host-prepare`. Only its command changes, from `cat <file>` to `devenv secret-get CLAUDE_CODE_OAUTH_TOKEN`. |
 | S9 | **GitHub:** unchanged identity (SPEC D9). `sbxenv.yaml`'s `github` command becomes `devenv secret-get GITHUB_GEJ_MACHINE_PAT`. |
 | S10 | **Typesafe:** stored in the project now, **not wired**, because Firstmate's typesafe dispatch stays out of scope (SPEC §1). Wiring it later takes a `host-prepare` custom secret (`TYPESAFE_API_KEY` for `api.typesafe.ai`) and a network allowance for that host. |
@@ -169,6 +169,7 @@ secrets:
 
   All values stay in variables and are never printed.
 - **The Claude custom secret** keeps the same `set-custom` call, placeholder file and `CLAUDE_AUTH` handling. Only `--command` changes, to `'"<absolute devenv>" secret-get CLAUDE_CODE_OAUTH_TOKEN'`.
+  - **As built (2026-09-28):** the placeholder file is gone. sbx keeps one custom secret per env var in a scope and refuses a second placeholder for it, so a host file that no longer matched sbx broke `sbx env run`. `host-prepare` now reads the placeholder sbx holds (`sbx secret ls --sandbox dev --json`), reuses it, and makes one only when there is none; it adds `--refresh` (S7). `CLAUDE_AUTH=login` removes the secret with `sbx secret rm --sandbox dev --host api.anthropic.com --env CLAUDE_CODE_OAUTH_TOKEN -f` (without `--sandbox`, rm looked only at global secrets and removed nothing).
 - **Warn** while `~/.config/devenv/secrets/` still exists: `plain-text secret files left over; delete them (docs/SECRETS.md S13)`.
 
 ### 6.7 `doctor`
@@ -210,11 +211,11 @@ secrets:
 3. **Store it:** run `~/devenv/bin/devenv secrets-init` and paste the project ID, client ID and client secret at its prompts. It prints `ok` for each secret, and the website tab can be closed.
 4. **Start:** `cd ~/devenv && sbx env run`.
 
-**From then on, unattended:** when an agent calls GitHub or Anthropic, sbx needs the real value. It runs `devenv secret-get` on the host, which reads the keyring, logs in to Infisical, gets a 5-minute access token, reads the one secret, hands it to sbx's memory and discards the token. This happens at most once every 55 minutes per secret.
+**From then on, unattended:** when an agent calls GitHub or Anthropic, sbx needs the real value. It runs `devenv secret-get` on the host, which reads the keyring, logs in to Infisical, gets a 5-minute access token, reads the one secret, hands it to sbx's memory and discards the token. This happens at most once per refresh period per secret (`SECRET_REFRESH`, 55 minutes by default; S7).
 
 **After a reboot:** a Linux desktop needs nothing. On WSL, a pop-up window asks for the keyring password at the next `sbx env run` (`host-prepare` opens it). A host with no display can't show that window: `host-prepare` stops and says so.
 
-**Replacing a token:** paste the new value into the Infisical website. Every machine picks it up within 55 minutes.
+**Replacing a token:** paste the new value into the Infisical website. Every machine picks it up within the refresh period (55 minutes by default).
 
 **Retiring or losing a machine:** revoke its client secret under `sbx-host` on the website. The other machines keep working.
 

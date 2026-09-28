@@ -148,7 +148,8 @@ Save the whole create output. The `devenv host-prepare` part should include
 `✓ Infisical secrets and checkout location look right`,
 `created the workspace /home/<you>/devenv/dev` (first run only) and end with
 `Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
-(placeholder)`. If the keyring is locked (after a WSL restart), a pop-up
+(new placeholder, refresh 55m)` (`reused placeholder` when sbx already holds
+one). If the keyring is locked (after a WSL restart), a pop-up
 window asks for its password first, and host-prepare prints `✓ keyring
 unlocked`. You should land in herdr, in a workspace named **firstmate**,
 with Claude starting in `~/devenv/dev/firstmate`, already signed in.
@@ -525,7 +526,7 @@ Results, from the owner on 2026-09-27 (SECRETS.md §5):
    Expected in the `devenv host-prepare` part: the leftover warnings,
    `✓ Infisical secrets and checkout location look right`, and
    `✓ Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
-   (placeholder)`. You land in herdr as before.
+   (… placeholder, refresh 55m)`. You land in herdr as before.
 
 6. **What sbx stored** (SPEC §10 invariant 12, and whether sbx expanded
    `${{ env.fileDir }}` in the `github` command):
@@ -636,3 +637,74 @@ Expected: `exit=1` for both.
 | A5 | 8.3 step 3, 8.4 | all `ok` with no leftover warnings; FAIL and exit 1 with `DEVENV_KEYRING_SERVICE=devenv-missing` |
 | A6 | 8.4 | `exit=1` for both |
 | A7 | the PR (code review) | no secret or identity detail as an argument in `secret-get`, `secrets-init`, `host-prepare` or `doctor` |
+
+## 9. Claude placeholder and secret refresh
+
+sbx is now the only record of the Claude placeholder, `CLAUDE_AUTH=login`
+removes the sandbox-scoped secret, and `SECRET_REFRESH` in `devenv.conf`
+(default `55m`, per-secret `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`)
+sets how often sbx fetches a secret again. This changes `devenv host-prepare`,
+which runs on the host, so the host checkout must be on the branch:
+
+```sh
+git -C ~/devenv fetch origin
+git -C ~/devenv switch fm/devenv-design-host-prepare-anthropic-secret-col-14
+```
+
+Switch back to `main` once the PR is merged. Placeholders aren't secret; the
+commands below still print only their first 14 characters.
+
+1. **Doctor** reads the new settings:
+   ```sh
+   ~/devenv/bin/devenv doctor | grep refresh
+   ```
+   Expected: `ok    refresh: CLAUDE_CODE_OAUTH_TOKEN 55m, GITHUB_GEJ_MACHINE_PAT 55m (devenv.conf)`.
+
+2. **A run that only attaches keeps Claude signed in.** With `dev` running:
+   ```sh
+   cd ~/devenv && sbx env run
+   ```
+   Expected in the `devenv host-prepare` part: `removed
+   ~/.config/devenv/claude-oauth-placeholder (sbx keeps the placeholder now)`
+   (first run only) and `✓ Claude setup-token available to sandbox dev as
+   CLAUDE_CODE_OAUTH_TOKEN (reused placeholder, refresh 55m)`. Then **(in
+   sandbox)** `claude -p "reply with the single word ok" < /dev/null`
+   answers `ok`.
+
+3. **What sbx stored for Claude:**
+   ```sh
+   sbx secret ls --sandbox dev --json | jq -c '.custom_secrets[] | {env, placeholder: (.placeholder[0:14] + "…"), refresh, source}'
+   ```
+   Expected: exactly one line, `{"env":"CLAUDE_CODE_OAUTH_TOKEN",
+   "placeholder":"sbx-cs-devenv-…","refresh":"55m","source":"/home/<you>/devenv/bin/devenv
+   secret-get CLAUDE_CODE_OAUTH_TOKEN"}` (before this change it said
+   `on-demand`).
+
+4. **A second attach-only run** changes nothing: `cd ~/devenv && sbx env run`
+   again prints `(reused placeholder, refresh 55m)`, step 3 prints the same
+   placeholder, and `claude -p` still answers `ok`.
+
+5. **A per-secret override**, without editing `devenv.conf` (the variable
+   reaches host-prepare through sbx):
+   ```sh
+   cd ~/devenv && SECRET_REFRESH_CLAUDE=10m sbx env run
+   sbx secret ls --sandbox dev --json | jq -r '.custom_secrets[] | .refresh'
+   cd ~/devenv && sbx env run
+   sbx secret ls --sandbox dev --json | jq -r '.custom_secrets[] | .refresh'
+   ```
+   Expected: `(reused placeholder, refresh 10m)` and `10m`; then `55m` again.
+
+6. **An invalid value is refused before anything runs:**
+   ```sh
+   SECRET_REFRESH_CLAUDE=5d ~/devenv/bin/devenv host-prepare; echo "exit=$?"
+   ```
+   Expected: `devenv: error: SECRET_REFRESH_CLAUDE in devenv.conf must be
+   on-demand or a duration such as 55m or 10m, not '5d'` and `exit=1`.
+
+7. **Optional, only right before a planned recreate** (it signs the running
+   sandbox out): `CLAUDE_AUTH=login ~/devenv/bin/devenv host-prepare` prints
+   `removed the Claude setup-token custom secret from sandbox dev
+   (CLAUDE_AUTH=login)`, and step 3 then prints nothing. Plain
+   `~/devenv/bin/devenv host-prepare` makes a new placeholder
+   (`new placeholder`); recreate `dev` (`sbx env rm`, `sbx env run`) so the
+   sandbox gets it.

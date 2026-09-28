@@ -141,8 +141,10 @@ mate and every worker run on your Claude subscription through the long-lived
   `dev` (`sbxenv.yaml` can't declare custom secrets) whose command is
   `devenv secret-get CLAUDE_CODE_OAUTH_TOKEN`. Inside the sandbox
   `CLAUDE_CODE_OAUTH_TOKEN` holds only a placeholder; the proxy swaps in the
-  real token on requests to `api.anthropic.com`. The placeholder is random and
-  kept on the host in `~/.config/devenv/claude-oauth-placeholder`.
+  real token on requests to `api.anthropic.com`. The placeholder is random,
+  and sbx is the only place that keeps it: on every `sbx env run`,
+  host-prepare reuses the one sbx already holds for `dev` (so a running
+  sandbox stays signed in) and makes a new one only when sbx has none.
 - Firstmate needs no changes: workers inherit the variable, and `quota-axi`
   reads your subscription's usage windows with it.
 - The token is inference-only by design: claude.ai connectors, Remote Control,
@@ -153,9 +155,9 @@ mate and every worker run on your Claude subscription through the long-lived
   (`SBX_CRED_ANTHROPIC_MODE=apikey`), which outranks the subscription and is
   rejected with HTTP 401.
 
-`CLAUDE_AUTH=login` instead uses no Claude secret: run `/login` once after
-each rebuild (a full-scope login that survives `sbx stop`). Switching modes
-takes a recreate.
+`CLAUDE_AUTH=login` instead uses no Claude secret (host-prepare removes the
+custom secret from `dev`): run `/login` once after each rebuild (a full-scope
+login that survives `sbx stop`). Switching modes takes a recreate.
 
 ## Secrets (Infisical)
 
@@ -172,10 +174,13 @@ No secret sits in a file, on the host or in the sandbox:
 - When an agent calls GitHub or Anthropic, sbx needs the real value. It runs
   `devenv secret-get NAME` on the host, which reads the keyring, logs in to
   Infisical for a 5-minute access token, reads the one secret and hands it to
-  sbx. sbx keeps it in memory and asks again every 55 minutes. The sandbox
-  only ever sees placeholders.
+  sbx. sbx keeps it in memory and asks again after the refresh set in
+  `devenv.conf`: `SECRET_REFRESH` (55 minutes by default), or a secret's own
+  `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`. A value is a duration
+  such as `10m` or `1h30m`, or `on-demand` (a fetch, and an Infisical login,
+  on every use). The sandbox only ever sees placeholders.
 - **Replacing a token** is one paste into the secret on the Infisical website.
-  Every machine picks it up within 55 minutes.
+  Every machine picks it up within the refresh (55 minutes by default).
 - **Retiring or losing a machine:** revoke its client secret on the website
   (`sbx-host`, Universal Auth). The other machines keep working.
 
