@@ -144,6 +144,9 @@ doctor_host() {
   else
     _wrn "not a git checkout"
   fi
+
+  echo "Android emulator (opt-in: devenv emulator start)"
+  emu_print_report < <(emu_host_report) || true
   echo
   echo "Operating rule: $(operating_rule)"
 }
@@ -229,6 +232,9 @@ doctor_env() {
   out=$(claude_config_problems)
   if [ -z "$out" ]; then _pass "overlay applied, status line sha256 matches"
   else while IFS= read -r t; do _fail "$t"; done <<<"$out"; fi
+
+  echo "Android (adb, and the host's emulator)"
+  emu_print_report < <(emu_env_report) || true
 
   echo "devenv check"
   cmd_check

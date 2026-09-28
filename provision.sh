@@ -18,6 +18,8 @@ DEVENV_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 . "$DEVENV_ROOT/lib/common.sh"
 # shellcheck source=lib/tools.sh
 . "$DEVENV_ROOT/lib/tools.sh"
+# shellcheck source=lib/android.sh
+. "$DEVENV_ROOT/lib/android.sh"
 # shellcheck source=lib/claude.sh
 . "$DEVENV_ROOT/lib/claude.sh"
 # shellcheck source=lib/herdr.sh
@@ -56,9 +58,9 @@ SYSTEM_PREFIX=${DEVENV_SYSTEM_PREFIX:-/usr/local}
 
 # 1. System packages. Never tmux. gh comes from GitHub's repository (step_gh).
 step_packages() {
-  local p missing=() pkgs=(git curl jq ca-certificates tar python3)
+  local p missing=() pkgs=(git curl jq ca-certificates tar unzip python3)
   if ! have dpkg-query; then
-    for p in git curl jq tar; do have "$p" || die "$p is missing and this is not a Debian/Ubuntu system"; done
+    for p in git curl jq tar unzip; do have "$p" || die "$p is missing and this is not a Debian/Ubuntu system"; done
     return 0
   fi
   for p in "${pkgs[@]}"; do
@@ -162,6 +164,12 @@ step_binaries() {
   for t in "${DEVENV_BINARIES[@]}"; do install_binary "$t"; done
 }
 
+# 3b. adb: Google's platform-tools, pinned, in devenv's Android SDK folder
+# (ANDROID_HOME, step 6), with adb linked into ~/.local/bin. x86_64 only.
+step_android() {
+  install_platform_tools
+}
+
 # 4. npm globals, into the existing prefix (plain mode falls back to ~/.local).
 step_npm() {
   local prefix
@@ -213,6 +221,12 @@ env_block_content() {
     printf 'export NPM_CONFIG_PREFIX=%q\n' "$NPM_CONFIG_PREFIX"
     # shellcheck disable=SC2016
     printf 'case ":$PATH:" in *":%s/bin:"*) ;; *) PATH="%s/bin:$PATH" ;; esac\n' "$NPM_CONFIG_PREFIX" "$NPM_CONFIG_PREFIX"
+  fi
+  # devenv's Android SDK (adb; projects can add packages with sdkmanager),
+  # unless ANDROID_HOME is already set.
+  if android_supported; then
+    # shellcheck disable=SC2016
+    printf 'export ANDROID_HOME="${ANDROID_HOME:-%s}"\n' "$(android_sdk_dir)"
   fi
   # shellcheck disable=SC2016
   printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
@@ -309,6 +323,7 @@ summary() {
   for t in "${DEVENV_BINARIES[@]}"; do printf '  %-22s %s\n' "$t" "$(bin_installed_version "$t")"; done
   for t in "${DEVENV_NPM_PACKAGES[@]}"; do printf '  %-22s %s\n' "$t" "$(npm_installed_version "$t")"; done
   printf '  %-22s %s\n' node "$(node_installed_version)"
+  if android_supported; then printf '  %-22s %s\n' adb "$(adb_installed_version)"; fi
   if have gh; then printf '  %-22s %s\n' gh "$(gh --version 2>/dev/null | extract_version)"; fi
   if have claude; then printf '  %-22s %s\n' claude "$(claude --version 2>/dev/null | extract_version)"; fi
 }
@@ -339,6 +354,7 @@ if [ "$PHASE" != user ]; then
 fi
 step_node
 step_binaries
+step_android
 step_npm
 step_claude_code
 if [ "$PHASE" != user ]; then

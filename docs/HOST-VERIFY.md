@@ -755,3 +755,131 @@ commands below still print only their first 14 characters.
    prints nothing. Plain `~/devenv/bin/devenv host-prepare` makes a new
    placeholder (`new placeholder`); recreate `dev` (`sbx env rm`,
    `sbx env run`) so the sandbox gets it.
+
+## 10. Android emulator (opt-in, D33)
+
+`devenv emulator` runs an Android emulator on the host, in a Docker Engine
+container with `/dev/kvm`, and sandboxes drive it with `adb` through one
+network policy rule (README: "Android emulator"). The agent built and tested
+everything it could in a sandbox (no KVM there): the image builds, the SDK
+volume unpacks, and the emulator gets as far as its hardware checks. Nothing
+below has run on a host yet. `devenv emulator` is host code, so the host
+checkout must be on the branch while the PR is open:
+
+```sh
+git -C ~/devenv fetch origin
+git -C ~/devenv switch fm/devenv-android-emulator
+```
+
+Run this on each host (WSL2 and the native Linux laptop); report which one.
+
+1. **Docker Engine** (skip what's already there). Docker's apt repository is
+   set up for sbx:
+   ```sh
+   docker info --format '{{.OperatingSystem}}' 2>&1 | tail -n 1
+   ```
+   `Docker Desktop` there means the `docker` in this Linux talks to Docker
+   Desktop, whose containers get no `/dev/kvm`: turn off Docker Desktop's WSL
+   integration for this distro first. A missing `docker`, or `permission
+   denied`:
+   ```sh
+   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+   sudo usermod -aG docker $USER      # then close the terminal and open a new one (on WSL: wsl --shutdown)
+   docker run --rm hello-world | head -n 2
+   ```
+   Expected: `Hello from Docker!`.
+
+2. **Doctor, before the first start:**
+   ```sh
+   ~/devenv/bin/devenv doctor | sed -n '/^Android emulator/,/^Operating rule/p'
+   ```
+   Expected: `ok    Docker Engine 29.…`, notes that the image and SDK volume
+   aren't made yet and that it isn't running, and `warn  sandboxes can't reach
+   it: allow it once with: sbx policy allow network localhost:15555`. Report
+   the lines if any says `FAIL`, or if the policy line is missing (then paste
+   `sbx policy check network --sandbox dev localhost:15555`).
+
+3. **First start** (downloads 2.2 GB, then boots; 5 to 15 minutes):
+   ```sh
+   time ~/devenv/bin/devenv emulator start
+   ```
+   Expected, in order: `emulator image devenv-android-emulator:… built`,
+   `downloads match versions.env`, `devenv: SDK unpacked (5.1G)`, `emulator
+   started …`, `Android booted (…s)`, `adb answers on 127.0.0.1:15555`, the
+   policy warning, and how to use and stop it. Paste the output and the time.
+   If it stops with `the emulator stopped while booting`, paste its output and
+   `docker logs devenv-android-emulator 2>&1 | tail -n 60`.
+   `x86_64 emulation currently requires hardware acceleration` there means
+   the container got no working KVM (on WSL: nested virtualization);
+   `does not have enough disk space` means Docker's disk is too full
+   (`df -h /var/lib/docker`).
+
+4. **Cost**, while it runs:
+   ```sh
+   docker stats --no-stream devenv-android-emulator --format '{{.MemUsage}} {{.CPUPerc}}'
+   docker system df -v | grep -E 'devenv-android|^VOLUME NAME|^REPOSITORY'
+   free -g | head -n 2
+   ```
+   Paste it (the README says about 5 GB of memory, 5.1 GB of volume and under
+   0.5 GB of image).
+
+5. **The policy rule**, once (it covers every sandbox and survives rebuilds):
+   ```sh
+   sbx policy allow network localhost:15555
+   ~/devenv/bin/devenv emulator status
+   ```
+   Expected: `ok    running; Android booted; adb answers on 127.0.0.1:15555`
+   and `ok    sandbox dev may reach it (the network policy allows
+   localhost:15555)`.
+
+6. **From the sandbox.** A sandbox gets `adb` when it is created (the kit
+   provisions it), and a merged PR reaches the running sandbox's devenv clone.
+   Until then, **(in sandbox)** take the branch into a temporary worktree and
+   install only `adb` from it (this leaves the environment block alone):
+   ```sh
+   git -C ~/fm-projects/devenv fetch -q origin fm/devenv-android-emulator
+   git -C ~/fm-projects/devenv worktree add -f /tmp/devenv-emu FETCH_HEAD
+   bash -c 'DEVENV_ROOT=/tmp/devenv-emu; . $DEVENV_ROOT/lib/common.sh; . $DEVENV_ROOT/lib/android.sh
+     load_config; resolve_paths; install_platform_tools'
+   ```
+   Expected: `adb 37.0.1 installed in /home/agent/.local/share/android-sdk/platform-tools`.
+   Then **(in sandbox)**:
+   ```sh
+   D=/tmp/devenv-emu/bin/devenv
+   adb --version | sed -n 2p
+   $D emulator status
+   $D emulator connect
+   $D emulator run -- adb shell getprop ro.build.version.sdk
+   $D emulator run -- adb shell pm list packages | wc -l
+   ```
+   Expected: `Version 37.0.1-…`; `ok    adb 37.0.1` and `ok    an emulator
+   answers at host.docker.internal:15555`; `connected to the emulator:
+   host.docker.internal:15555 (Android 16, API 36)` and the serial; `36`; a
+   package count in the hundreds. Before step 5's rule, `status` instead says
+   `the network policy doesn't let this sandbox reach localhost:15555 …`.
+   Paste everything. If `connect` fails after `status` said the emulator
+   answers, paste `adb devices -l` and `adb connect host.docker.internal:15555`.
+   Afterwards: `git -C ~/fm-projects/devenv worktree remove --force /tmp/devenv-emu`.
+
+7. **A real test** (optional, if a phone-app project with instrumented tests
+   is at hand): in its worktree **(in sandbox)**, `devenv emulator run --
+   ./gradlew connectedDebugAndroidTest`. It needs a JDK and the project's SDK
+   packages, which devenv doesn't install; report what was missing.
+
+8. **Stop and clean:**
+   ```sh
+   ~/devenv/bin/devenv emulator stop
+   free -g | head -n 2
+   ~/devenv/bin/devenv emulator start     # a restart: no download, boot only
+   ~/devenv/bin/devenv emulator stop
+   ```
+   Expected: `emulator stopped; its image and SDK volume stay…`, the memory
+   back, and the second start going straight to `emulator started`. Keep the
+   image and volume for later use; `~/devenv/bin/devenv emulator clean`
+   removes them (about 5.5 GB).
+
+9. **After a restart** (a WSL restart, or a reboot): nothing starts by itself.
+   `docker ps -a --filter name=devenv-android-emulator` shows nothing, and
+   `devenv emulator start` boots it again in 1 to 3 minutes.
+
+Switch the checkout back to `main` once the PR is merged.

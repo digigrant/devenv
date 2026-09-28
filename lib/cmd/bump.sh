@@ -8,11 +8,15 @@
 #   devenv bump [--repo PATH] no-mistakes <version|latest>
 #   devenv bump [--repo PATH] npm <package> <version|latest>
 #   devenv bump [--repo PATH] node <version|latest-lts>
+#   devenv bump [--repo PATH] platform-tools <version|latest>
+#   devenv bump [--repo PATH] android-emulator <build|latest>
+#   devenv bump [--repo PATH] android-system-image <api> [tag]
+#   devenv bump [--repo PATH] android-base-image [image:tag]
 #   devenv bump --list          pinned vs latest, read-only
 
 HERDR_MANIFEST_PATH=distribution/agent-detection/claude.toml
 
-bump_usage() { sed -n '5,12p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
+bump_usage() { sed -n '5,16p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
 
 # GitHub REST call: gh when it works, anonymous curl otherwise.
 gh_api() {
@@ -125,6 +129,90 @@ bump_node() {
   set_pin NODE_SHA256_AARCH64 "$a"
 }
 
+# Google's SDK repository index (repository2-3.xml, or sys-img/<tag>/sys-img2-3.xml):
+# one line per stable archive, "path version url host-os host-arch sha1"
+# ("-" for a missing field).
+android_repo_packages() {
+  curl -fsSL --retry 3 -m 60 "$ANDROID_REPO_URL/$1" | python3 -c '
+import sys, xml.etree.ElementTree as ET
+root = ET.fromstring(sys.stdin.buffer.read())
+chan = {c.get("id"): c.text for c in root.iter("channel")}
+for p in root.iter():
+    if not p.tag.endswith("remotePackage"):
+        continue
+    ref = p.find("channelRef")
+    if ref is None or chan.get(ref.get("ref")) != "stable":
+        continue
+    rev = ".".join(x.text for x in p.find("revision") if x.tag in ("major", "minor", "micro"))
+    for a in p.iter("archive"):
+        print(p.get("path"), rev, a.findtext("complete/url"), a.findtext("host-os") or "-",
+              a.findtext("host-arch") or "-", a.findtext("complete/checksum") or "-")
+'
+}
+
+# android_zip_sha256 URL [SHA1]: download URL to a temporary file, check it
+# against Google's SHA-1 when given, and print its sha256.
+android_zip_sha256() {
+  local url=$1 sha1=${2:--} tmp sum
+  tmp=$(mktemp)
+  log "downloading ${url##*/} to compute its sha256"
+  curl -fsSL --retry 3 -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed: $url"; }
+  if [ "$sha1" != - ] && [ "$(sha1sum "$tmp" | cut -d' ' -f1)" != "$sha1" ]; then
+    rm -f "$tmp"; die "${url##*/} does not match the SHA-1 in Google's repository index"
+  fi
+  sum=$(file_sha256 "$tmp")
+  rm -f "$tmp"
+  printf '%s' "$sum"
+}
+
+bump_platform_tools() {
+  local ver=${1:-latest} line sha1=-
+  line=$(android_repo_packages repository2-3.xml | awk '$1 == "platform-tools" && $4 == "linux"' | head -n 1)
+  if [ "$ver" = latest ]; then
+    [ -n "$line" ] || die "Google's repository lists no stable platform-tools for Linux"
+    ver=$(printf '%s' "$line" | cut -d' ' -f2)
+  fi
+  [ "$(printf '%s' "$line" | cut -d' ' -f3)" = "platform-tools_r$ver-linux.zip" ] && sha1=$(printf '%s' "$line" | cut -d' ' -f6)
+  set_pin ANDROID_PLATFORM_TOOLS_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/platform-tools_r$ver-linux.zip" "$sha1")"
+  set_pin ANDROID_PLATFORM_TOOLS_VERSION "$ver"
+}
+
+bump_android_emulator() {
+  local want=${1:-latest} line ver url sha1 build
+  line=$(android_repo_packages repository2-3.xml | awk '$1 == "emulator" && $4 == "linux" && $5 == "x64"')
+  [ "$want" = latest ] || line=$(printf '%s\n' "$line" | awk -v u="emulator-linux_x64-$want.zip" '$3 == u')
+  line=$(printf '%s\n' "$line" | head -n 1)
+  [ -n "$line" ] || die "Google's repository lists no stable Linux emulator build $want (devenv bump --list shows the latest)"
+  read -r _ ver url _ _ sha1 <<<"$line"
+  build=${url#emulator-linux_x64-}; build=${build%.zip}
+  set_pin ANDROID_EMULATOR_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/$url" "$sha1")"
+  set_pin ANDROID_EMULATOR_VERSION "$ver"
+  set_pin ANDROID_EMULATOR_BUILD "$build"
+}
+
+bump_android_system_image() {
+  local api=${1:?usage: devenv bump android-system-image <api> [tag]} tag=${2:-} line rev zip sha1
+  [ -n "$tag" ] || tag=$(sed -n 's/^ANDROID_SYSTEM_IMAGE_TAG=//p' "$BUMP_FILE")
+  line=$(android_repo_packages "sys-img/$tag/sys-img2-3.xml" | awk -v p="system-images;android-$api;$tag;x86_64" '$1 == p' | head -n 1)
+  [ -n "$line" ] || die "Google's repository lists no stable system-images;android-$api;$tag;x86_64"
+  read -r _ rev zip _ _ sha1 <<<"$line"
+  log "the system image is about 2 GB"
+  set_pin ANDROID_SYSTEM_IMAGE_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/sys-img/$tag/$zip" "$sha1")"
+  set_pin ANDROID_SYSTEM_IMAGE_API "$api"
+  set_pin ANDROID_SYSTEM_IMAGE_TAG "$tag"
+  set_pin ANDROID_SYSTEM_IMAGE_REVISION "$rev"
+  set_pin ANDROID_SYSTEM_IMAGE_ZIP "$zip"
+}
+
+bump_android_base_image() {
+  local ref=${1:-} digest
+  [ -n "$ref" ] || ref=$(sed -n 's/^ANDROID_EMULATOR_BASE_IMAGE=//p' "$BUMP_FILE" | sed 's/@.*//')
+  have docker || die "resolving $ref's digest needs docker (docker buildx imagetools inspect)"
+  digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r '.digest // empty') \
+    && [ -n "$digest" ] || die "cannot resolve the digest of $ref"
+  set_pin ANDROID_EMULATOR_BASE_IMAGE "${ref%@*}@$digest"
+}
+
 bump_list() {
   local row latest
   printf '%-22s %-14s %s\n' TOOL PINNED LATEST
@@ -142,6 +230,14 @@ bump_list() {
   done
   latest=$(curl -fsSL -m 20 https://nodejs.org/dist/index.json 2>/dev/null | jq -r '[.[] | select(.lts != false)][0].version // "?"')
   printf '%-22s %-14s %s\n' node "$NODE_VERSION" "${latest#v}"
+  latest=$(android_repo_packages repository2-3.xml 2>/dev/null | awk '$1 == "platform-tools" && $4 == "linux" { print $2; exit }')
+  printf '%-22s %-14s %s\n' platform-tools "$ANDROID_PLATFORM_TOOLS_VERSION" "${latest:-?}"
+  latest=$(android_repo_packages repository2-3.xml 2>/dev/null | awk '$1 == "emulator" && $4 == "linux" && $5 == "x64" { u = $3; sub(/^emulator-linux_x64-/, "", u); sub(/\.zip$/, "", u); print $2 " (" u ")"; exit }')
+  printf '%-22s %-14s %s\n' android-emulator "$ANDROID_EMULATOR_VERSION ($ANDROID_EMULATOR_BUILD)" "${latest:-?}"
+  latest=$(android_repo_packages "sys-img/$ANDROID_SYSTEM_IMAGE_TAG/sys-img2-3.xml" 2>/dev/null \
+    | awk -v p="system-images;android-$ANDROID_SYSTEM_IMAGE_API;$ANDROID_SYSTEM_IMAGE_TAG;x86_64" '$1 == p { print "r" $2; exit }')
+  printf '%-22s %-14s %s  (other API levels: devenv bump android-system-image <api>)\n' android-system-image \
+    "$ANDROID_SYSTEM_IMAGE_API r$ANDROID_SYSTEM_IMAGE_REVISION" "${latest:-?}"
   latest=$(git ls-remote "$FIRSTMATE_REPO" refs/heads/main 2>/dev/null | cut -c1-12)
   printf '%-22s %-14s %s  (%s; not pinned, updates automatically)\n' firstmate - "${latest:-?}" "${FIRSTMATE_REPO#https://github.com/}"
   if [ -n "${FIRSTMATE_UPSTREAM:-}" ]; then
@@ -180,6 +276,10 @@ cmd_bump() {
     treehouse|no-mistakes) bump_gotool "$what" "$@" ;;
     npm) bump_npm "$@" ;;
     node) bump_node "$@" ;;
+    platform-tools) bump_platform_tools "$@" ;;
+    android-emulator) bump_android_emulator "$@" ;;
+    android-system-image) bump_android_system_image "$@" ;;
+    android-base-image) bump_android_base_image "$@" ;;
     *) rm -f "$BUMP_BACKUP"; bump_usage; die "unknown bump target: $what" ;;
   esac
   show_diff

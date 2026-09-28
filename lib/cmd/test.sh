@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# devenv test [--image IMG]... [--no-containers] [--no-shellcheck]
+# devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image]
 # (spec §6.13, AC5, AC12):
 #   1. tests/statusline-identity.sh
 #   2. tests/secrets.sh: secret-get, doctor and host-prepare against a fake
-#      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9)
+#      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9); and
+#      tests/emulator.sh: devenv emulator against a fake docker, adb and sbx
 #   3. shellcheck on every script (installed shellcheck, or the pinned image)
 #   4. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions (gh from GitHub's apt
@@ -14,14 +15,16 @@
 #      Ubuntu's, a clean re-run).
 #   6. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
 #      step against a real gnome-keyring in an ubuntu:26.04 container.
-# --no-containers runs only 1 to 3.
+# --no-containers runs only 1 to 3. --emulator-image adds
+# tests/emulator-image.sh: the emulator's real image and SDK volume (downloads
+# about 2.2 GB, needs about 6 GB of Docker disk).
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 
 # The entry points; -x follows what they source, so lib/ is checked in context.
 shellcheck_targets() {
   printf '%s\n' provision.sh bin/devenv bin/devenv-entry agents/claude/statusline.sh \
-    agents/claude/hooks/memory-link.sh tests/*.sh tests/fakes/*
+    agents/claude/hooks/memory-link.sh android/emulator/launch.sh tests/*.sh tests/fakes/*
 }
 
 run_shellcheck() {
@@ -38,13 +41,14 @@ run_shellcheck() {
 }
 
 cmd_test() {
-  local images=() containers=1 lint=1 rc=0 img results=()
+  local images=() containers=1 lint=1 emulator_image=0 rc=0 img results=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --image) images+=("${2:?--image needs a value}"); shift 2 ;;
       --no-containers) containers=0; shift ;;
       --no-shellcheck) lint=0; shift ;;
-      *) die "usage: devenv test [--image IMG]... [--no-containers] [--no-shellcheck]" ;;
+      --emulator-image) emulator_image=1; shift ;;
+      *) die "usage: devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image]" ;;
     esac
   done
   [ ${#images[@]} -gt 0 ] || images=("${DEVENV_TEST_IMAGES[@]}")
@@ -56,6 +60,10 @@ cmd_test() {
   echo "== secrets (fakes)"
   if bash "$DEVENV_ROOT/tests/secrets.sh"; then results+=("PASS secrets")
   else results+=("FAIL secrets"); rc=1; fi
+
+  echo "== emulator (fakes)"
+  if bash "$DEVENV_ROOT/tests/emulator.sh"; then results+=("PASS emulator")
+  else results+=("FAIL emulator"); rc=1; fi
 
   if [ "$lint" = 1 ]; then
     echo "== shellcheck"
@@ -75,6 +83,12 @@ cmd_test() {
     echo "== keyring (real gnome-keyring)"
     if bash "$DEVENV_ROOT/tests/keyring.sh"; then results+=("PASS keyring")
     else results+=("FAIL keyring"); rc=1; fi
+  fi
+  if [ "$emulator_image" = 1 ]; then
+    have docker || die "docker is required for --emulator-image"
+    echo "== emulator image (real)"
+    if bash "$DEVENV_ROOT/tests/emulator-image.sh"; then results+=("PASS emulator image")
+    else results+=("FAIL emulator image"); rc=1; fi
   fi
 
   echo

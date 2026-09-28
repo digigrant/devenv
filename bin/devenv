@@ -8,25 +8,29 @@
 #   devenv doctor              full health report (also runs on the host)
 #   devenv bump …              update versions.env in a writable checkout (see: devenv bump --help)
 #   devenv test                provision.sh in throwaway containers, status line identity, shellcheck
+#   devenv emulator connect|run|status   use the host's Android emulator (see: devenv emulator --help)
 # On the host:
 #   devenv doctor              host prerequisites and the operating rules
 #   devenv host-prepare        sbx lifecycle.initialize hook (doctor-lite, keyring, Claude sign-in)
 #   devenv secrets-init        store this machine's Infisical login in the keyring (interactive)
 #   devenv secret-get NAME     print one secret from Infisical (what sbx runs)
+#   devenv emulator start|stop|status|clean   the opt-in Android emulator (a container with /dev/kvm)
 set -euo pipefail
 
 DEVENV_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$DEVENV_ROOT/lib/common.sh"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case "$cmd" in
-  start|entry|check|doctor|bump|test|host-prepare|secrets-init|secret-get)
+  start|entry|check|doctor|bump|test|host-prepare|secrets-init|secret-get|emulator)
     # shellcheck source=../lib/tools.sh
     . "$DEVENV_ROOT/lib/tools.sh"
+    # shellcheck source=../lib/android.sh
+    . "$DEVENV_ROOT/lib/android.sh"
     # shellcheck source=../lib/claude.sh
     . "$DEVENV_ROOT/lib/claude.sh"
     # shellcheck source=../lib/herdr.sh
@@ -51,6 +55,8 @@ case "$cmd" in
     . "$DEVENV_ROOT/lib/cmd/host-prepare.sh"
     # shellcheck source=../lib/cmd/secrets-init.sh
     . "$DEVENV_ROOT/lib/cmd/secrets-init.sh"
+    # shellcheck source=../lib/cmd/emulator.sh
+    . "$DEVENV_ROOT/lib/cmd/emulator.sh"
     load_config
     "cmd_${cmd//-/_}" "$@"
     ;;

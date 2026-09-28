@@ -98,6 +98,9 @@ and `busctl`, and a Secret Service (gnome-keyring) for the keyring:
 sudo apt install jq curl libsecret-tools gnome-keyring   # busctl comes with systemd
 ```
 
+The opt-in [Android emulator](#android-emulator-opt-in) also needs Docker
+Engine; its section says how to install it.
+
 On WSL, Docker supports the Linux `sbx` only "best-effort"
 (docker/sbx-releases#397); `devenv doctor` says so. The owner chose it so WSL
 and native Linux behave the same.
@@ -264,6 +267,8 @@ Edit it and run `sbx env run` again; no recreate is needed.
 | Claude memory | `~/devenv/dev/.devenv-state/claude-memory/<project>/`, linked from `~/.claude/projects/<project>/memory` | yes |
 | Firstmate project clones | `~/fm-projects` (sandbox disk) | no: push your work |
 | treehouse worktrees | `~/.treehouse` (sandbox disk) | no |
+| adb (platform-tools) | `~/.local/share/android-sdk` (sandbox disk) | no: installed again at the next create |
+| Android emulator image and SDK volume | the host's Docker Engine | yes (host; `devenv emulator clean` removes them) |
 | herdr sessions, Claude transcripts | sandbox | no |
 
 ## Projects
@@ -288,21 +293,105 @@ sbx's shared skills store is off for this sandbox (`sandboxOptions.skills`):
 sbx mounts it only for its built-in agents, not for a custom kit like
 devenv's.
 
+## Android emulator (opt-in)
+
+Workers on phone apps run their instrumented and UI tests on an Android
+emulator that runs on the host, in a Docker container with KVM: the sandbox
+has no KVM of its own (Docker's nested virtualization for sandboxes is
+macOS-only, docker/sbx-releases#497). Nothing runs until you start it, and it
+never starts by itself.
+
+It is Android 16 (API 36, Google APIs image, x86_64) on Google's emulator
+37.1, headless (no window, software graphics, no audio): a phone-sized device
+(1080×2400), fresh at every start, with animations off for UI tests. It
+follows the Android emulator team's container recipe; devenv builds a small
+image of its own and keeps the SDK in a Docker volume, from Google's
+downloads pinned by sha256 in `versions.env`
+([docs/HANDOFF.md](docs/HANDOFF.md) compares the maintained emulator
+containers and says why). `devenv bump android-system-image <api>` moves it
+to another Android version.
+
+| Cost | |
+|---|---|
+| Memory | about 5 GB while it runs: 4 GB of guest RAM (`ANDROID_EMULATOR_MEMORY`; the least the API 36 image boots with) plus the emulator itself. None while stopped. |
+| CPU | 4 cores (`ANDROID_EMULATOR_CORES`) while it runs |
+| Disk | about 5.5 GB: the SDK volume (5.1 GB) and the image (under 0.5 GB). The first start also downloads 2.2 GB into `~/.cache/devenv/android-emulator`, deleted once unpacked. A running device adds a few GB inside its container, gone when it stops, and the emulator won't start without a few GB free on Docker's disk. |
+| Time | the first start downloads, unpacks and builds (5 to 15 minutes, mostly the download); every start then boots Android, 1 to 3 minutes |
+
+**Once per host:**
+
+1. Docker Engine inside this Linux, not Docker Desktop (Docker Desktop's
+   containers get no `/dev/kvm`). Docker's apt repository is already set up
+   for sbx:
+   ```sh
+   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+   sudo usermod -aG docker $USER     # then log out and in again
+   ```
+   Membership in the `docker` group is as good as root on this machine.
+2. Let sandboxes reach the emulator's adb port. One rule, for every sandbox,
+   that survives rebuilds:
+   ```sh
+   sbx policy allow network localhost:15555
+   ```
+3. `~/devenv/bin/devenv doctor` checks both, and KVM, in its "Android
+   emulator" section.
+
+**Start and stop it on the host:**
+
+```sh
+~/devenv/bin/devenv emulator start    # returns once Android has booted
+~/devenv/bin/devenv emulator status
+~/devenv/bin/devenv emulator stop     # frees the memory; image and SDK stay
+~/devenv/bin/devenv emulator clean    # also removes the image, SDK volume and downloads
+```
+
+**In the sandbox, a worker runs a test with:**
+
+```sh
+devenv emulator run -- ./gradlew connectedDebugAndroidTest
+```
+
+`run` connects the sandbox's adb to the emulator
+(`host.docker.internal:15555`), waits its turn when another worker is using
+it, and runs the command with `ANDROID_SERIAL` set to it.
+`devenv emulator connect` only connects and prints the serial, for plain
+`adb -s host.docker.internal:15555 …`. `devenv emulator status` says why the
+emulator can't be reached: not started on the host, or no policy rule for its
+port. Building an app also needs a JDK and the project's SDK packages; devenv
+installs only `adb`, into `ANDROID_HOME` (`~/.local/share/android-sdk`), where
+`sdkmanager` can add packages.
+
+**How the sandbox reaches it.** The emulator's adb port is published on the
+host's `127.0.0.1:15555` only. adb speaks raw TCP, not HTTP; sbx's proxy
+relays a sandbox's TCP connection to `host.docker.internal:<port>` to the
+host's `localhost:<port>` when the network policy allows `localhost:<port>`
+(sbx 0.30 and later), which is the rule above.
+
+**Limits.** One emulator per host, shared by the sandbox's workers, one test
+run at a time. x86_64 hosts only. No Google Play (the Google APIs image). adb
+authorization is off, so any process on the host, and any sandbox the policy
+lets in, can drive the device. Using it accepts the
+[Android SDK License Agreement](https://developer.android.com/studio/terms).
+To use another port, set `ANDROID_EMULATOR_PORT` (devenv.conf by PR, or in the
+environment for one run) and allow that port instead.
+
 ## Commands
 
 `bin/devenv` (on `PATH` inside the sandbox):
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, the keyring and both Infisical secrets (never prompts), checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, adb and whether the host's emulator answers. |
 | `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
-| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets commands against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
+| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `--list`. Prints the diff; never commits. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
 | `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
 | `devenv secrets-init` | host | Stores this machine's Infisical login (project ID, client ID, client secret) in the keyring, then test-fetches both secrets. Interactive; run it again to replace a value (Enter keeps the others). |
 | `devenv secret-get NAME` | host | Prints one secret from Infisical (`GITHUB_GEJ_MACHINE_PAT` or `CLAUDE_CODE_OAUTH_TOKEN`). sbx runs it; you don't need to. |
+| `devenv emulator start\|stop\|status\|clean` | host | The opt-in Android emulator ([Android emulator](#android-emulator-opt-in)): start it (building its image and SDK volume the first time) and wait for Android to boot; stop it; report the container, boot, adb, KVM and the policy rule; remove its image, SDK volume and downloads. |
+| `devenv emulator connect\|run -- CMD\|status` | sandbox, plain | Connect adb to the host's emulator and print its serial; connect and run CMD with `ANDROID_SERIAL` set, one run at a time; say whether it can be reached and why not. |
 
 ### Updating versions
 
@@ -360,7 +449,8 @@ git clone https://github.com/digigrant/devenv ~/devenv
 ~/devenv/provision.sh --plain            # add --yes to skip the apt prompts
 ```
 
-It installs the same pinned tools into `~/.local`, installs `gh` from
+It installs the same pinned tools into `~/.local` (on x86_64 also `adb`, from
+Google's platform-tools, in `~/.local/share/android-sdk`), installs `gh` from
 GitHub's apt repository (adding its keyring and source), installs Node
 `NODE_VERSION` if node is missing or older than `NODE_MIN_VERSION`, installs
 Claude Code with its official installer if missing (the one documented
@@ -382,11 +472,12 @@ versions.env           every pin and sha256
 bin/                   devenv CLI and the entrypoint shim
 lib/                   shared shell code; lib/cmd/ has one file per subcommand
 agents/claude/         everything Claude-specific (status line, overlay, CLAUDE.md, hooks)
+android/emulator/      the opt-in host emulator's image: Dockerfile and launch.sh
 firstmate/config/      starting copy of Firstmate's config
 firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
-tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), fixtures
+tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), emulator tests (fakes, real image), fixtures
 ```
 
 ### herdr's Claude detection rules
@@ -469,6 +560,12 @@ when herdr is bumped past the version it was tested with.
   sandbox runs from `~/fm-projects/devenv`, so changes there take effect at
   once. Move them to a branch (`git -C ~/fm-projects/devenv stash`, then work
   in a worktree) or discard them.
+- **`devenv emulator` in the sandbox says the network policy doesn't let it
+  reach `localhost:15555`.** On the host, once:
+  `sbx policy allow network localhost:15555`. **"no emulator answers"**: start
+  it on the host, `~/devenv/bin/devenv emulator start`. On the host,
+  `devenv emulator status` and `docker logs devenv-android-emulator` show the
+  rest; `devenv emulator stop`, then `start`, gives a fresh device.
 - Logs: `~/.cache/devenv/start.log`, `/var/log/sbx-kit-startup.log`,
   `~/.cache/devenv/herdr-server.log`.
 
@@ -481,6 +578,9 @@ when herdr is bumped past the version it was tested with.
   GitHub App with short-lived tokens through host-prepare's `github` secret
   (a `secret-get`-style command) and a short `SECRET_REFRESH_GITHUB`.
 - Worker effort and model profiles in Firstmate's `config/crew-dispatch.json`.
+- An Android build toolchain in the sandbox (a JDK, `sdkmanager` and the SDK
+  packages projects need), if phone-app projects don't bring their own.
+  devenv installs only `adb` today.
 - A second worker harness (e.g. Codex): `config/crew-harness` plus its install.
 - Bumping herdr past 0.8.0 once Firstmate verifies newer versions.
 - v3 kits, once a v3 Claude workload is available to build on: a v3 kit can
