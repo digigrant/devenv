@@ -5,7 +5,9 @@
 # $FAKE_LOG/sbx-placeholder, and behave as sbx 0.45.1 does (checked against
 # it): set-custom with the stored placeholder updates it, any other placeholder
 # is refused, and rm without --sandbox looks only at global secrets.
-# FAKE_SBX_LS replaces the `secret ls` output; FAKE_SBX_FAIL=ls makes it fail.
+# `secret set` (a service secret) just succeeds, as sbx does after running the
+# command once. FAKE_SBX_LS replaces the `secret ls` output; FAKE_SBX_FAIL=ls
+# or FAKE_SBX_FAIL=set makes that subcommand fail.
 set -euo pipefail
 printf 'sbx %s\n' "$*" >> "$FAKE_LOG/argv"
 store=$FAKE_LOG/sbx-placeholder
@@ -31,6 +33,15 @@ case "${1:-} ${2:-}" in
     else
       echo '{"secrets":[],"custom_secrets":[],"shadowed_services":[],"env_only_count":0}'
     fi
+    ;;
+  "secret set")
+    if [ "${FAKE_SBX_FAIL:-}" = set ]; then
+      echo "error: verify command failed (exit_status): command: exit status 1; use --no-verify to store without resolving now" >&2
+      echo "  try: sbx secret set --help" >&2
+      exit 1
+    fi
+    echo "Verified: command resolved successfully."
+    echo "Saved command secret for service \"${3:-}\" in scope \"$(flag sandbox "$@")\""
     ;;
   "secret set-custom")
     ph=$(flag placeholder "$@") scope=$(flag sandbox "$@")

@@ -114,7 +114,7 @@ case " $CALLS" in
   *" Unlock "*" Prompt "*|*" Prompt "*" Unlock "*) pass "it asked the Secret Service to open its unlock window (calls: $CALLS)" ;;
   *) bad "no Unlock and Prompt (calls: $CALLS)" ;;
 esac
-grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" 2>/dev/null && bad "sbx was called" || pass "sbx was not called"
+grep -q '^sbx secret set' "$FAKE_LOG/argv" 2>/dev/null && bad "sbx was called" || pass "sbx was not called"
 
 echo "== host-prepare, unlocked"
 # Stands in for the owner typing the password into the window.
@@ -123,8 +123,9 @@ sleep 2
 [ "$(locked)" = false ] && pass "the keyring is unlocked" || bad "could not unlock the keyring"
 : > "$FAKE_LOG/argv"
 run bash "$DEV" host-prepare
-[ "$RC" = 0 ] && grep -q '^sbx secret set-custom .*secret-get CLAUDE_CODE_OAUTH_TOKEN' "$FAKE_LOG/argv" \
-  && pass "checks pass and the Claude custom secret is set" || bad "host-prepare: exit $RC, stderr: $ERR"
+[ "$RC" = 0 ] && grep -q '^sbx secret set github .*secret-get GITHUB_GEJ_MACHINE_PAT' "$FAKE_LOG/argv" \
+  && grep -q '^sbx secret set-custom .*secret-get CLAUDE_CODE_OAUTH_TOKEN' "$FAKE_LOG/argv" \
+  && pass "checks pass and the github and Claude secrets are set" || bad "host-prepare: exit $RC, stderr: $ERR"
 
 echo
 if [ "$fail" = 0 ]; then echo "keyring: PASS"; else echo "keyring: FAIL"; exit 1; fi

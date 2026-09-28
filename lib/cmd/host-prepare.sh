@@ -6,14 +6,38 @@
 #     can't be fetched from Infisical or has the wrong shape or account, or
 #     the checkout overlaps a sandbox workspace other than its own dev/;
 #   - create the workspace folder dev/ beside sbxenv.yaml;
-#   - give the sandbox the Claude setup-token as a custom secret (V1), with
-#     the refresh from devenv.conf.
+#   - give the sandbox its two secrets from Infisical, each with its refresh
+#     from devenv.conf: the gej-machine GitHub token as the github service
+#     secret, and the Claude setup-token as a custom secret (V1).
 # Secret values stay in variables and are never printed. It never reads
 # anything from dev/, which the sandbox can write.
 
 # Uses path_within, host_workspaces and checkout_overlap_problems (doctor.sh)
 # and the keyring, Infisical and refresh helpers (lib/secrets.sh); bin/devenv
 # sources them.
+
+# The error line from sbx's output ("error: …"), or its last line. sbx never
+# shows a command source's own output unless asked (--show-error), so this
+# can't carry a secret value.
+sbx_error_line() {
+  printf '%s\n' "$1" | grep -m 1 '^error:' || printf '%s\n' "$1" | tail -n 1
+}
+
+# The gej-machine token as this sandbox's github service secret. It is set
+# here rather than in sbxenv.yaml's secrets:, which can't read devenv.conf's
+# refresh settings; sbxenv.yaml's bindings.github still approves its domains.
+# sbx checks the command by running it once. `sbx env rm` deletes it with the
+# rest of the sandbox's scope.
+sync_github_secret() {
+  local refresh out cmd
+  refresh=$(secret_refresh github)
+  # sbx stores this command text in plain text: a path and a name only.
+  cmd="$(printf '%q' "$DEVENV_REAL/bin/devenv") secret-get $SECRET_GITHUB"
+  if ! out=$(sbx secret set github --sandbox "$CONF_SANDBOX_NAME" --command "$cmd" --refresh "$refresh" 2>&1 </dev/null); then
+    die "sbx secret set github failed: $(sbx_error_line "$out")"
+  fi
+  ok "gej-machine token ($SECRET_GITHUB) available to sandbox $CONF_SANDBOX_NAME as the github secret (refresh $refresh)"
+}
 
 # The Claude setup-token as an sbx custom secret for this sandbox (V1).
 # sbx keeps one custom secret per env var in a sandbox's scope, keyed by its
@@ -59,7 +83,7 @@ sync_claude_auth() {
       cmd="$(printf '%q' "$DEVENV_REAL/bin/devenv") secret-get $SECRET_CLAUDE"
       if ! out=$(sbx secret set-custom --sandbox "$CONF_SANDBOX_NAME" --host "$CLAUDE_TOKEN_HOST" \
                  --env "$CLAUDE_TOKEN_ENV" --placeholder "$ph" --command "$cmd" --refresh "$refresh" 2>&1 </dev/null); then
-        die "sbx secret set-custom failed: $(printf '%s' "$out" | tail -n 1)"
+        die "sbx secret set-custom failed: $(sbx_error_line "$out")"
       fi
       ok "Claude setup-token available to sandbox $CONF_SANDBOX_NAME as CLAUDE_CODE_OAUTH_TOKEN ($how placeholder, refresh $refresh)"
       ;;
@@ -70,7 +94,7 @@ sync_claude_auth() {
                  --env "$CLAUDE_TOKEN_ENV" -f 2>&1 </dev/null); then
         case "$out" in
           *"No custom secret found"*) ;;
-          *) die "sbx secret rm failed: $(printf '%s' "$out" | tail -n 1)" ;;
+          *) die "sbx secret rm failed: $(sbx_error_line "$out")" ;;
         esac
       fi
       if printf '%s\n' "$out" | grep -q '^Deleted '; then
@@ -81,15 +105,8 @@ sync_claude_auth() {
   esac
 }
 
-# The github command in sbxenv.yaml names the secret itself; it must match
-# SECRET_GITHUB, or secret-get refuses it and the sandbox gets no token.
-sbxenv_github_command_problem() {
-  grep -qE "^[[:space:]]*command:.*secret-get $SECRET_GITHUB'?[[:space:]]*\$" "$DEVENV_REAL/sbxenv.yaml" && return 1
-  echo "sbxenv.yaml's github command does not run \`devenv secret-get $SECRET_GITHUB\` (SECRET_GITHUB in devenv.conf)"
-}
-
 cmd_host_prepare() {
-  local real p t problems
+  local real t problems
   [ "$(detect_mode)" = sbx ] && die "host-prepare runs on the host, not inside a sandbox"
   case "$CLAUDE_AUTH" in token|login) ;; *) die "CLAUDE_AUTH in devenv.conf must be token or login, not '$CLAUDE_AUTH'" ;; esac
   problems=$(secret_refresh_problems)
@@ -97,7 +114,6 @@ cmd_host_prepare() {
   real=$(readlink -f "$DEVENV_ROOT")
   DEVENV_REAL=$real
   keyring_unlock_if_locked
-  if p=$(sbxenv_github_command_problem); then die "$p"; fi
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case "$t" in "ok: "*) ;; "warn: "*) warn "${t#warn: }" ;; *) die "$t" ;; esac
@@ -112,6 +128,7 @@ cmd_host_prepare() {
     mkdir -p "$real/dev"
     ok "created the workspace $real/dev"
   fi
+  sync_github_secret
   sync_claude_auth
   return 0
 }

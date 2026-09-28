@@ -178,6 +178,8 @@ STORE=$FAKE_LOG/sbx-placeholder
 OLD_FILE=$W/home/.config/devenv/claude-oauth-placeholder
 set_custom() { grep '^sbx secret set-custom' "$FAKE_LOG/argv" || true; }
 set_flag() { set_custom | sed -n "s/.* --$1 \([^ ]*\).*/\1/p"; }
+set_github() { grep '^sbx secret set github ' "$FAKE_LOG/argv" || true; }
+github_refresh() { set_github | sed -n 's/.* --refresh \([^ ]*\).*/\1/p'; }
 run -- host-prepare
 cmd=$(set_custom)
 if [ "$RC" = 0 ] && printf '%s' "$cmd" | grep -qF -- "--command $W/devenv/checkout/bin/devenv secret-get CLAUDE_CODE_OAUTH_TOKEN"; then
@@ -187,7 +189,14 @@ first=$(set_flag placeholder)
 [[ $first =~ ^sbx-cs-devenv-[0-9a-f]{32}$ ]] && printf '%s' "$ERR" | grep -qF '(new placeholder, refresh 55m)' \
   && grep -qx 'sbx secret ls --sandbox dev --json' "$FAKE_LOG/argv" \
   && pass "nothing in sbx yet: asks sbx, then makes a new random placeholder" || fail "a new placeholder: '$first', stderr: $ERR"
-[ "$(set_flag refresh)" = 55m ] && pass "refresh: SECRET_REFRESH's 55m by default" || fail "refresh: '$(set_flag refresh)'"
+[ "$(set_flag refresh)" = 55m ] && [ "$(github_refresh)" = 55m ] && pass "refresh: SECRET_REFRESH's 55m for both secrets by default" \
+  || fail "refresh: Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+cmd=$(set_github)
+if printf '%s' "$cmd" | grep -qF -- "sbx secret set github --sandbox dev --command $W/devenv/checkout/bin/devenv secret-get GITHUB_GEJ_MACHINE_PAT --refresh 55m" \
+   && printf '%s' "$ERR" | grep -qF 'gej-machine token (GITHUB_GEJ_MACHINE_PAT) available to sandbox dev as the github secret (refresh 55m)' \
+   && [ "$(grep -n '^sbx secret set github ' "$FAKE_LOG/argv" | cut -d: -f1)" -lt "$(grep -n '^sbx secret set-custom' "$FAKE_LOG/argv" | cut -d: -f1)" ]; then
+  pass "sets the sandbox's github service secret to run devenv secret-get GITHUB_GEJ_MACHINE_PAT (before the Claude secret)"
+else fail "the github secret: ${cmd:-none}, stderr: $ERR"; fi
 no_leak_in_args "host-prepare"
 [ -d "$W/devenv/checkout/dev" ] && pass "created dev/" || fail "dev/ was not created"
 run -- host-prepare
@@ -214,14 +223,24 @@ run FAKE_SBX_FAIL=ls -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'sbx secret ls --sandbox dev --json failed' && [ -z "$(set_custom)" ] \
   && pass "sbx secret ls fails: stops before set-custom" || fail "host-prepare with a failing sbx secret ls: exit $RC, stderr: $ERR"
 run SECRET_REFRESH=10m -- host-prepare
-[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 10m ] && pass "refresh: follows SECRET_REFRESH" || fail "SECRET_REFRESH=10m: exit $RC, refresh '$(set_flag refresh)'"
-run SECRET_REFRESH_CLAUDE=on-demand SECRET_REFRESH_GITHUB=5m -- host-prepare
-[ "$RC" = 0 ] && [ "$(set_flag refresh)" = on-demand ] \
-  && pass "refresh: SECRET_REFRESH_CLAUDE overrides SECRET_REFRESH (and SECRET_REFRESH_GITHUB doesn't)" \
-  || fail "SECRET_REFRESH_CLAUDE=on-demand: exit $RC, refresh '$(set_flag refresh)'"
-run SECRET_REFRESH_CLAUDE=' ' -- host-prepare
-[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 55m ] && pass "refresh: a blank SECRET_REFRESH_CLAUDE falls back to SECRET_REFRESH" \
-  || fail "SECRET_REFRESH_CLAUDE=' ': exit $RC, refresh '$(set_flag refresh)'"
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 10m ] && [ "$(github_refresh)" = 10m ] && pass "refresh: both secrets follow SECRET_REFRESH" \
+  || fail "SECRET_REFRESH=10m: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_CLAUDE=on-demand -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = on-demand ] && [ "$(github_refresh)" = 55m ] \
+  && pass "refresh: SECRET_REFRESH_CLAUDE overrides SECRET_REFRESH for the Claude secret only" \
+  || fail "SECRET_REFRESH_CLAUDE=on-demand: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_GITHUB=5m SECRET_REFRESH=1h -- host-prepare
+[ "$RC" = 0 ] && [ "$(github_refresh)" = 5m ] && [ "$(set_flag refresh)" = 1h ] \
+  && pass "refresh: SECRET_REFRESH_GITHUB overrides SECRET_REFRESH for the GitHub secret only" \
+  || fail "SECRET_REFRESH_GITHUB=5m: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_CLAUDE=' ' SECRET_REFRESH_GITHUB='' -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 55m ] && [ "$(github_refresh)" = 55m ] \
+  && pass "refresh: blank per-secret settings fall back to SECRET_REFRESH" \
+  || fail "blank per-secret settings: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run FAKE_SBX_FAIL=set -- host-prepare
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -qF 'sbx secret set github failed: error: verify command failed' && [ -z "$(set_custom)" ] \
+  && pass "sbx secret set github fails: stops with sbx's error line, before the Claude secret" \
+  || fail "host-prepare with a failing sbx secret set: exit $RC, stderr: $ERR"
 for bad in SECRET_REFRESH_CLAUDE=5d SECRET_REFRESH_GITHUB=never SECRET_REFRESH=55; do
   run "$bad" -- host-prepare
   [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -qF "${bad%%=*} in devenv.conf must be on-demand or a duration such as 55m or 10m, not '${bad#*=}'" \
@@ -233,14 +252,14 @@ run SECRET_REFRESH= -- host-prepare
   && pass "an empty SECRET_REFRESH: rejected" || fail "host-prepare with SECRET_REFRESH empty: exit $RC, stderr: $ERR"
 run CLAUDE_AUTH=login -- host-prepare
 [ "$RC" = 0 ] && grep -qx 'sbx secret rm --sandbox dev --host api.anthropic.com --env CLAUDE_CODE_OAUTH_TOKEN -f' "$FAKE_LOG/argv" \
-  && [ ! -e "$STORE" ] && [ -z "$(set_custom)" ] \
+  && [ ! -e "$STORE" ] && [ -z "$(set_custom)" ] && [ "$(github_refresh)" = 55m ] \
   && printf '%s' "$ERR" | grep -qF 'removed the Claude setup-token custom secret from sandbox dev (CLAUDE_AUTH=login)' \
-  && pass "login mode: removes the sandbox-scoped secret (--sandbox, --host, --env)" || fail "login mode: exit $RC, stderr: $ERR"
+  && pass "login mode: removes the sandbox-scoped Claude secret (--sandbox, --host, --env); still sets github" || fail "login mode: exit $RC, stderr: $ERR"
 run CLAUDE_AUTH=login -- host-prepare
 [ "$RC" = 0 ] && grep -q '^sbx secret rm --sandbox dev' "$FAKE_LOG/argv" && ! printf '%s' "$ERR" | grep -q 'removed the Claude' \
   && pass "login mode with nothing stored: says nothing about removing" || fail "login mode again: exit $RC, stderr: $ERR"
 run FAKE_LOGIN_CODE=401 -- host-prepare
-[ "$RC" != 0 ] && [ "$(logins)" = 1 ] && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+[ "$RC" != 0 ] && [ "$(logins)" = 1 ] && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" \
   && pass "a rejected login: stops before sbx after one login attempt" || fail "host-prepare with a rejected login: exit $RC, $(logins) login attempts"
 run FAKE_KR_STATE=locked FAKE_KR_PROMPT=accept DISPLAY=:0 -- host-prepare
 [ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'a window asks for the keyring password now' && printf '%s' "$ERR" | grep -q 'keyring unlocked' \
@@ -248,14 +267,14 @@ run FAKE_KR_STATE=locked FAKE_KR_PROMPT=accept DISPLAY=:0 -- host-prepare
   && pass "locked keyring: a lookup opens the unlock window, then host-prepare carries on" \
   || fail "host-prepare with a locked keyring and an accepted window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked DISPLAY=:0 -- host-prepare
-[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'the keyring is still locked' && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'the keyring is still locked' && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" \
   && pass "locked keyring, window closed: stops before sbx" || fail "host-prepare with a dismissed window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'no window can ask for its password here (no DISPLAY or WAYLAND_DISPLAY)' \
   && pass "locked keyring without a display: clear instructions" || fail "host-prepare locked without a display: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=missing -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'keyring entry missing' \
-  && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" && pass "missing entries: stops before sbx" || fail "host-prepare with missing entries: exit $RC"
+  && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" && pass "missing entries: stops before sbx" || fail "host-prepare with missing entries: exit $RC"
 mkdir -p "$W/home/.config/devenv/secrets"
 run -- host-prepare
 printf '%s' "$ERR" | grep -q 'warning: plain-text secret files left over' && pass "warns about leftover secret files" || fail "no leftover warning"
