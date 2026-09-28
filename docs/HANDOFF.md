@@ -7,7 +7,8 @@ layout, on 2026-09-27 when the Infisical secrets manager was built
 when sbx became the only record of the Claude placeholder and the secret
 refresh became configurable (branch
 `fm/devenv-design-host-prepare-anthropic-secret-col-14`), and again on
-2026-09-28 for the opt-in Android emulator (branch
+2026-09-28 when Tailscale moved onto the host (branch
+`fm/devenv-tailscale-host`) and for the opt-in Android emulator (branch
 `fm/devenv-android-emulator`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
 [HOST-VERIFY.md](HOST-VERIFY.md).
 
@@ -101,8 +102,9 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Locked-keyring check (SECRETS.md §6.4) | "if the keyring is locked, fail with one line; never prompt" (mechanism open) | the Secret Service's `SearchItems` over D-Bus (`busctl --user`), per entry: unlocked, locked or missing | Checked against gnome-keyring 50 in a container with `dbus-monitor`: `secret-tool lookup` on a locked keyring calls `Unlock` and `Prompt` (the window); `secret-tool search` calls `GetSecret` on every entry; `SearchItems` alone loads nothing and never prompts. `tests/keyring.sh` keeps checking it. |
 | Firstmate's own registration of devenv | entered by hand in each running instance's `data/projects.md` | seeded automatically: `firstmate/data/projects.md` in this repo, copied into `$FM_HOME/data/` by `provision.sh` step 8 whenever the destination file is absent, same contract as the existing `firstmate/config/` seeding | Without this, a fresh sandbox or a wiped Firstmate home came up with devenv unregistered again, requiring the same manual step every time. |
 | Claude placeholder and secret refresh | a random placeholder kept on the host (`~/.config/devenv/claude-oauth-placeholder`); `set-custom` "create-or-update"; sbx's refresh default | sbx is the only record of the placeholder: host-prepare reads it back with `sbx secret ls --sandbox dev --json`, reuses it, and makes one only when sbx has none; the host file is deleted. `CLAUDE_AUTH=login` removes the secret with `--sandbox dev --host … --env …`. `SECRET_REFRESH` (default `55m`) with per-secret `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`, validated like sbx's `--refresh`. The GitHub secret moved out of `sbxenv.yaml`: host-prepare sets it (`sbx secret set github --sandbox dev --command … --refresh …`) and `sbxenv.yaml` keeps only `bindings.github` | sbx refuses a second placeholder for the same env var in a scope, so a host file that no longer matched sbx broke `sbx env run` (the owner hit it); login mode's `rm` lacked `--sandbox` and removed nothing; the custom secret's default refresh is `on-demand`, not the 55 minutes SECRETS.md S7 intended; `sbxenv.yaml` expands only `${{ env.* }}` references, so it can't take the refresh from `devenv.conf` (the owner chose moving the GitHub secret to host-prepare over a second copy of the setting). Owner's decisions, 2026-09-28. |
+| Tailscale (D33, §6.14) | not in devenv; Tailscale ran on Windows | Tailscale runs in Linux on every host (the WSL 2 distro, or a Linux PC), off Windows. `devenv tailscale-setup` (host, interactive) adds Tailscale's apt repository as Tailscale documents, installs `tailscale` and `tailscale-archive-keyring`, enables tailscaled and, when needed, runs `sudo tailscale up` for the one browser sign-in; host `doctor` checks it all, including systemd in WSL and Tailscale on Windows. No auth key; nothing stored. `host-prepare` ignores Tailscale | Owner's decision, 2026-09-28 (option B), for the Magic Conch hub. Tailscale's WSL page says Tailscale on Windows and in WSL at once breaks WSL's Tailscale traffic, so the owner accepted uninstalling it on Windows. Install and sign-in are a new interactive command rather than part of `host-prepare`: the lifecycle hook can't answer sudo's password prompt or wait on a browser, and a sandbox mustn't depend on Tailscale. |
 | GitHub CLI (§6.3 step 1) | Ubuntu's `gh` from apt in plain mode; the sandbox image's own (Ubuntu's 2.46) in sbx mode | GitHub's current release from GitHub's own apt repository (`cli.github.com`), set up as GitHub documents (keyring in `/etc/apt/keyrings`, a `signed-by` source), in both modes and unpinned; it replaces the image's Ubuntu `gh` at every create | Ubuntu's 2.46 rejects `gh api --slurp` ("unknown flag"), which Firstmate's PR comment and review monitor uses, so the monitor failed on every PR. Owner's decision, 2026-09-28. |
-| Android emulator (D33) | not in the spec | opt-in, one per host: `devenv emulator start\|stop\|status\|clean` runs a headless emulator in a Docker Engine container with `/dev/kvm`, adb published on the host's `127.0.0.1:15555`; sandboxes use it through one global rule the owner adds once (`sbx policy allow network localhost:15555`) with `devenv emulator connect\|run`; `adb` (Google's platform-tools, pinned) in every sandbox. devenv's own small image following Google's recipe, the SDK (5.1 GB) in a Docker volume, all from Google's zips pinned by sha256 | The owner wants workers to run emulator tests without leaving the sandbox (2026-09-28), and accepted the recommendation of an emulator on each Linux host reached through one firewall rule. The sandbox has no KVM and sbx's nested virtualization is macOS-only. See "Android emulator" below for the image choice. |
+| Android emulator (D34, §6.15) | not in the spec | opt-in, one per host: `devenv emulator start\|stop\|status\|clean` runs a headless emulator in a Docker Engine container with `/dev/kvm`, adb published on the host's `127.0.0.1:15555`; sandboxes use it through one global rule the owner adds once (`sbx policy allow network localhost:15555`) with `devenv emulator connect\|run`; `adb` (Google's platform-tools, pinned) in every sandbox. devenv's own small image following Google's recipe, the SDK (5.1 GB) in a Docker volume, all from Google's zips pinned by sha256 | The owner wants workers to run emulator tests without leaving the sandbox (2026-09-28), and accepted the recommendation of an emulator on each Linux host reached through one firewall rule. The sandbox has no KVM and sbx's nested virtualization is macOS-only. See "Android emulator" below for the image choice. |
 
 ## Verification status
 
@@ -119,7 +121,7 @@ re-run with the new one.
 | V6, V10, V11, V12 | Host checks pending. In the sandbox: memory written by Claude lands in the state folder through the symlink; Firstmate's detect-only bootstrap reports nothing missing except the optional `PRESENTATION_UNAVAILABLE: lavish-axi`. |
 | V7 | Replaced by the clone at create (HOST-VERIFY V7). The first layout's check passed on the host. |
 | AC5, AC8, AC9, AC12, AC13–AC16 | Checked in the sandbox (AC13 on a simulated host, including the new "workspace inside the checkout" case). |
-| V13, AC17 (Android emulator) | In the sandbox: raw TCP through the proxy, the real image and SDK volume (`tests/emulator-image.sh`), the command against fakes (`tests/emulator.sh`), and the live policy diagnosis. Everything on a host is pending: HOST-VERIFY §10. |
+| V14, AC18 (Android emulator) | In the sandbox: raw TCP through the proxy, the real image and SDK volume (`tests/emulator-image.sh`), the command against fakes (`tests/emulator.sh`), and the live policy diagnosis. Everything on a host is pending: HOST-VERIFY §11. |
 
 ## Open work
 
@@ -168,7 +170,26 @@ it re-clones when a task needs one.
   has verified ≤ 0.8.0) and treehouse 3.0.0 (major bump). `devenv bump --list`
   shows them.
 
-### 4. Secrets manager (Infisical)
+### 4. Tailscale on the hosts (owner)
+
+HOST-VERIFY §10 on the Windows PC (uninstall Tailscale on Windows first) and
+on the Linux laptop, then the admin console's DNS page once (MagicDNS, Enable
+HTTPS). Only the fakes in `tests/tailscale.sh` have run: `pkgs.tailscale.com`
+is blocked in the sandbox. Things only the host can show:
+
+- the real `sc.exe query Tailscale` output through WSL's interop, which
+  doctor parses;
+- that Tailscale's `<codename>.tailscale-keyring.list` matches devenv's copy
+  of it byte for byte (a machine set up by Tailscale's own installer then
+  says "already installed");
+- that tailscaled keeps working in WSL (the MTU fix is tailscaled's own), and
+  a `tailscale ping` from WSL to the phone.
+
+Later, with the Magic Conch hub: keeping the WSL distro running (WSL stops an
+idle distro, and tailscaled with it), `tailscale serve`, and perhaps
+`tailscale set --operator` so the hub needn't run as root.
+
+### 5. Secrets manager (Infisical)
 
 Designed with the owner on 2026-09-27 and built the same day on branch
 `fm/devenv-devenv-infisical-secrets-manager-df`, PR
@@ -189,10 +210,10 @@ Out of scope, unchanged: typesafe wiring (S10), SECRETS.md §11's exclusions
 and §12's later items. A host with no display can't show the unlock window;
 host-prepare stops with instructions (no such host today).
 
-### 5. Android emulator
+### 6. Android emulator
 
 Built on 2026-09-28 (branch `fm/devenv-android-emulator`); nothing has run on
-a host yet. HOST-VERIFY §10, on both hosts, answers what only a host can
+a host yet. HOST-VERIFY §11, on both hosts, answers what only a host can
 show: that Android boots in the container (under WSL2 that needs nested
 virtualization for Docker's containers, as it already does for sbx), how much
 memory and time it takes, that the sandbox's adb reaches it through

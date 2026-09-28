@@ -94,9 +94,15 @@ doctor_host() {
   fi
   if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then _pass "/dev/kvm is accessible"; else _fail "/dev/kvm is not accessible"; fi
   if id -nG | tr ' ' '\n' | grep -qx kvm; then _pass "user is in the kvm group"; else _wrn "user is not in the kvm group (sudo usermod -aG kvm \$USER, then log in again)"; fi
-  if grep -qi microsoft /proc/version 2>/dev/null; then
+  if is_wsl; then
     _info "note: this is WSL. Docker supports the Linux sbx inside WSL only \"best-effort\" (docker/sbx-releases#397)."
   fi
+
+  echo "Tailscale"
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    case "$t" in "ok: "*) _pass "${t#ok: }" ;; "warn: "*) _wrn "${t#warn: }" ;; *) _fail "$t" ;; esac
+  done < <(tailscale_problems)
 
   echo "secrets (Infisical, keyring service $(keyring_service))"
   case "$CLAUDE_AUTH" in token|login) ;; *) _fail "CLAUDE_AUTH in devenv.conf must be token or login" ;; esac

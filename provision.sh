@@ -89,9 +89,7 @@ GH_APT_KEYRING=/etc/apt/keyrings/githubcli-archive-keyring.gpg
 GH_APT_LIST=/etc/apt/sources.list.d/github-cli.list
 
 # Installed version of the gh package, or empty.
-gh_pkg_version() {
-  dpkg-query -W -f='${Status}\t${Version}\n' gh 2>/dev/null | awk -F'\t' '$1 == "install ok installed" { print $2 }' || true
-}
+gh_pkg_version() { deb_pkg_version gh; }
 
 # gh_is_githubs VERSION: true when VERSION is apt's candidate for gh and
 # GitHub's repository provides it.
