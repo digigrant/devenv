@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake sc.exe for tests/tailscale.sh: `sc.exe query Tailscale`, as Windows
+# answers it through WSL's interop (CRLF line ends).
+#   FAKE_WIN_TS  absent (default) | running | stopped | broken (no answer)
+set -euo pipefail
+printf 'sc.exe %s\n' "$*" >> "$FAKE_LOG/argv"
+[ "$*" = "query Tailscale" ] || { echo "fake sc.exe: unexpected call" >&2; exit 2; }
+state() {
+  printf '\r\nSERVICE_NAME: Tailscale \r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n'
+  printf '        STATE              : %s \r\n' "$1"
+  printf '        WIN32_EXIT_CODE    : 0  (0x0)\r\n        CHECKPOINT         : 0x0\r\n'
+}
+case "${FAKE_WIN_TS:-absent}" in
+  running) state '4  RUNNING'; printf '                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)\r\n' ;;
+  stopped) state '1  STOPPED' ;;
+  absent) printf '[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.\r\n\r\n'; exit 36 ;;
+  *) echo "cannot execute binary file: Exec format error" >&2; exit 126 ;;
+esac

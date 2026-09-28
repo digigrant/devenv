@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fake sudo for tests/tailscale.sh: logs its argv to $FAKE_LOG/argv, then runs
+# the command as the same user.
+set -euo pipefail
+printf 'sudo %s\n' "$*" >> "$FAKE_LOG/argv"
+exec "$@"

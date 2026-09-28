@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Fake dpkg-query for tests/tailscale.sh: `dpkg-query -W -f=… PKG` answers
+# "install ok installed<TAB><version>" for a package recorded in
+# $FAKE_LOG/dpkg/<pkg> (tests/fakes/apt-get installs them), as devenv's
+# format asks, and "no packages found" otherwise.
+set -euo pipefail
+pkg=${!#}
+if [ -f "$FAKE_LOG/dpkg/$pkg" ]; then
+  printf 'install ok installed\t%s\n' "$(cat "$FAKE_LOG/dpkg/$pkg")"
+else
+  echo "dpkg-query: no packages found matching $pkg" >&2
+  exit 1
+fi

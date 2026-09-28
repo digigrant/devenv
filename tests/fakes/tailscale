@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Fake tailscale for tests/tailscale.sh: logs its argv to $FAKE_LOG/argv.
+# `status --json` answers only while tests/fakes/systemctl says tailscaled is
+# active, with the backend state in $FAKE_LOG/ts-state (else FAKE_TS_STATE,
+# default NeedsLogin); `up` prints a sign-in link and signs in (Running).
+#   FAKE_TS_AUTH_URL      AuthURL while NeedsLogin
+#   FAKE_TS_MAGICDNS      true (default) | false
+#   FAKE_TS_HTTPS         1 (default): CertDomains holds the machine's name
+#   FAKE_TS_KEY_EXPIRY    an RFC 3339 time, "none" for expiry disabled;
+#                         default 150 days from now
+#   FAKE_TS_UP_FAIL=1     `up` fails
+set -euo pipefail
+printf 'tailscale %s\n' "$*" >> "$FAKE_LOG/argv"
+state=$(cat "$FAKE_LOG/ts-state" 2>/dev/null || echo "${FAKE_TS_STATE:-NeedsLogin}")
+case "$*" in
+  "status --json")
+    daemon=$(cat "$FAKE_LOG/tailscaled" 2>/dev/null || true)
+    if [ "${daemon%% *}" != active ]; then
+      echo "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)" >&2
+      exit 1
+    fi
+    exp=${FAKE_TS_KEY_EXPIRY:-$(date -u -d '+150 days' +%Y-%m-%dT%H:%M:%SZ)}
+    [ "$exp" != none ] || exp=''
+    jq -n --arg state "$state" --arg url "${FAKE_TS_AUTH_URL:-}" --arg exp "$exp" \
+      --argjson magic "${FAKE_TS_MAGICDNS:-true}" --arg https "${FAKE_TS_HTTPS:-1}" '
+      {Version: "1.90.6", BackendState: $state, AuthURL: $url, TailscaleIPs: [],
+       Self: {HostName: "devhost", DNSName: "", Online: false}, CurrentTailnet: null, CertDomains: null}
+      | if $state == "Running" then
+          .TailscaleIPs = ["100.101.102.103", "fd7a:115c:a1e0::1"]
+          | .Self.DNSName = "devhost.tail1234.ts.net." | .Self.Online = true
+          | .CurrentTailnet = {Name: "owner@example.com", MagicDNSSuffix: "tail1234.ts.net", MagicDNSEnabled: $magic}
+          | .CertDomains = (if $https == "1" then ["devhost.tail1234.ts.net"] else null end)
+          | if $exp != "" then .Self.KeyExpiry = $exp else . end
+        else . end'
+    ;;
+  up)
+    [ -z "${FAKE_TS_UP_FAIL:-}" ] || { echo "backend error: fake failure" >&2; exit 1; }
+    printf '\nTo authenticate, visit:\n\n\thttps://login.tailscale.com/a/fake0123abcd\n\n'
+    echo Running > "$FAKE_LOG/ts-state"
+    echo "Success."
+    ;;
+  *) echo "fake tailscale: unexpected call" >&2; exit 2 ;;
+esac

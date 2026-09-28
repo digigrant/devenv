@@ -65,6 +65,18 @@ detect_mode() {
   if [ "${IS_SANDBOX:-}" = 1 ] || [ -n "${SANDBOX_NAME:-}" ]; then echo sbx; else echo plain; fi
 }
 
+# A system path on the host. DEVENV_HOST_ROOT (tests only) stands in a
+# folder for /.
+host_path() { printf '%s%s' "${DEVENV_HOST_ROOT:-}" "$1"; }
+
+# true on WSL, whose kernel names Microsoft.
+is_wsl() { grep -qi microsoft "$(host_path /proc/version)" 2>/dev/null; }
+
+# Installed version of a Debian package, or empty.
+deb_pkg_version() {
+  dpkg-query -W -f='${Status}\t${Version}\n' "$1" 2>/dev/null | awk -F'\t' '$1 == "install ok installed" { print $2 }' || true
+}
+
 # ---------------------------------------------------------------- config
 # Expand a literal leading ~ or $HOME in a config value.
 expand_home() {

@@ -755,3 +755,148 @@ commands below still print only their first 14 characters.
    prints nothing. Plain `~/devenv/bin/devenv host-prepare` makes a new
    placeholder (`new placeholder`); recreate `dev` (`sbx env rm`,
    `sbx env run`) so the sandbox gets it.
+
+## 10. Tailscale on the host
+
+devenv now installs Tailscale on each host and signs it in (README:
+Tailscale; spec D33, §6.14), and host `doctor` checks it. This adds a host
+command (`devenv tailscale-setup`) and changes `devenv doctor`, which run on
+the host, so the host checkout must be on the branch:
+
+```sh
+git -C ~/devenv fetch origin
+git -C ~/devenv switch fm/devenv-tailscale-host
+```
+
+Switch back to `main` once the PR is merged. The agent could only test this
+against fakes: `pkgs.tailscale.com` is blocked in the sandbox, and it can't run
+anything on the host. Nothing here touches a sandbox; `host-prepare` doesn't
+look at Tailscale.
+
+### 10.1 The Windows PC (WSL 2)
+
+1. **Tailscale off Windows.** Uninstall it on Windows (Settings > Apps >
+   Installed apps > Tailscale > Uninstall), unless you rely on it there; then
+   keep it stopped instead (administrator PowerShell:
+   `Set-Service Tailscale -StartupType Disabled; Stop-Service Tailscale`).
+   From WSL:
+   ```sh
+   sc.exe query Tailscale | tr -d '\r' | grep -E 'FAILED|STATE'
+   ```
+   Expected: `[SC] EnumQueryServicesStatus:OpenService FAILED 1060:`
+   (uninstalled) or `STATE : 1  STOPPED`. Paste it either way, since devenv
+   reads this output.
+
+2. **systemd in the distro.**
+   ```sh
+   ls -d /run/systemd/system; cat /etc/wsl.conf
+   ```
+   Expected: `/run/systemd/system`, and `systemd=true` under `[boot]`. If it
+   is missing, step 3 prints the fix.
+
+3. **Doctor before setup:**
+   ```sh
+   ~/devenv/bin/devenv doctor | sed -n '/^Tailscale$/,/^secrets/p'
+   ```
+   Expected:
+   ```text
+   Tailscale
+     ok    systemd is running in this WSL distro
+     ok    Tailscale is not installed on Windows
+     FAIL  Tailscale is not installed; run: ~/devenv/bin/devenv tailscale-setup
+   ```
+   (`warn  Tailscale is installed on Windows but stopped…` if you kept it
+   installed.)
+
+4. **Set up** (sudo asks for your password; have a browser ready):
+   ```sh
+   ~/devenv/bin/devenv tailscale-setup
+   ```
+   Expected, in order:
+   ```text
+   devenv: ✓ Tailscale is not installed on Windows
+   devenv: adding Tailscale's apt repository (https://pkgs.tailscale.com/stable/ubuntu <codename>) and installing tailscale; sudo may ask for your password
+   devenv: ✓ Tailscale apt source /etc/apt/sources.list.d/tailscale.list (changed), key /usr/share/keyrings/tailscale-archive-keyring.gpg (changed)
+   devenv: ✓ tailscale <version> installed from Tailscale's apt repository
+   devenv: ✓ tailscaled is running and starts at boot
+   devenv: this machine isn't signed in to Tailscale yet: a one-time sign-in in a browser
+   devenv: running: sudo tailscale up
+   devenv: open the link it prints, sign in, and it carries on
+
+   To authenticate, visit:
+
+           https://login.tailscale.com/a/…
+   ```
+   Open the link in your Windows browser and sign in to your tailnet. It then
+   prints `Success.` and:
+   ```text
+   devenv: ✓ signed in: <machine>.<tailnet>.ts.net (100.x.y.z) on tailnet <tailnet>; key expires <date>
+   ```
+   followed by `✓` or a warning each for MagicDNS and HTTPS certificates. (If
+   the package didn't start tailscaled itself, the daemon line reads
+   `tailscaled started, and starts at boot`.)
+
+5. **Run it again:**
+   ```sh
+   ~/devenv/bin/devenv tailscale-setup
+   ```
+   Expected: no sudo prompt and no sign-in; `✓ tailscale <version>, from
+   Tailscale's apt repository (already installed)`, `✓ tailscaled is running
+   and starts at boot`, then the same `signed in` line.
+
+6. **What it installed:**
+   ```sh
+   cat /etc/apt/sources.list.d/tailscale.list
+   apt-cache policy tailscale | head -n 3
+   systemctl is-enabled tailscaled; systemctl is-active tailscaled
+   ```
+   Expected: `# Tailscale packages for ubuntu <codename>` and
+   `deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu <codename> main`;
+   `Installed:` equal to `Candidate:`; `enabled`, `active`.
+
+7. **Admin console, once per tailnet.** On the
+   [Machines](https://console.tailscale.com/admin/machines) page, check the
+   new WSL machine; if the Windows PC was listed before, remove its old entry
+   (and rename the WSL one if you like). On the
+   [DNS](https://console.tailscale.com/admin/dns) page, turn on MagicDNS if it
+   is off, and under HTTPS Certificates select Enable HTTPS. Then:
+   ```sh
+   ~/devenv/bin/devenv doctor | sed -n '/^Tailscale$/,/^secrets/p'
+   ```
+   Expected: every line `ok`: systemd, not on Windows, `tailscale <version>,
+   from Tailscale's apt repository`, `tailscaled is running and starts at
+   boot`, `signed in: …`, `MagicDNS is on for the tailnet`, `HTTPS
+   certificates are on for the tailnet`.
+
+8. **Traffic from WSL works** (the reason Tailscale is off Windows). With the
+   Tailscale app signed in on your phone:
+   ```sh
+   tailscale status
+   tailscale ping <phone's machine name>
+   ```
+   Expected: the phone listed, and `pong from <phone> (100.x.y.z) via …`.
+
+9. **Doctor fails with the fix** when the daemon is down (this only stops
+   Tailscale for a moment):
+   ```sh
+   sudo systemctl stop tailscaled
+   ~/devenv/bin/devenv doctor | grep 'tailscaled is not running'; echo "exit=${PIPESTATUS[0]}"
+   sudo systemctl start tailscaled
+   ```
+   Expected: `FAIL  tailscaled is not running; run: sudo systemctl enable
+   --now tailscaled` and `exit=1`.
+
+10. **The sandbox is unaffected:** `cd ~/devenv && sbx env run` behaves as
+    before (host-prepare prints nothing about Tailscale).
+
+### 10.2 The Linux laptop (native)
+
+The same as 10.1 without steps 1 and 2 (native Linux has no Windows side,
+and Ubuntu runs systemd): step 3 shows only the `FAIL  Tailscale is not
+installed` line, step 4 starts at `adding Tailscale's apt repository`, and
+the rest is identical. If this laptop already runs Tailscale from
+Tailscale's own installer, step 3 starts past the install, and step 4 either
+prints `(already installed)` straight away or, where Tailscale's source file
+differs from devenv's copy of it, rewrites the source once and runs apt; its
+sign-in step is skipped when the laptop is already signed in. Paste what it
+prints, and `cat /etc/apt/sources.list.d/tailscale.list` from before step 4.
