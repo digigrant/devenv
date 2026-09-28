@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Fake docker for tests/emulator.sh (and tests/secrets.sh's doctor runs): logs
+# its argv to $FAKE_LOG/argv and keeps images, volumes and one container as
+# files under $FAKE_LOG/docker, answering the calls lib/cmd/emulator.sh makes
+# the way Docker Engine 29 does.
+#   FAKE_DOCKER_INFO=denied|down   docker info fails like a socket without access, or a stopped daemon
+#   FAKE_DOCKER_OS                 docker info's OperatingSystem (default: Ubuntu 24.04.3 LTS)
+#   FAKE_DOCKER_BOOT=N|exit        the container reports "running starting" for N inspects (default 2),
+#                                  then "running healthy"; exit: it stops while booting
+#   FAKE_DOCKER_RUN_FAIL=port      docker run -d fails: the host port is taken
+#   FAKE_DOCKER_ACCEL=0|3          the status line of emulator -accel-check (0: KVM works)
+set -euo pipefail
+printf 'docker %s\n' "$*" >> "$FAKE_LOG/argv"
+d=$FAKE_LOG/docker
+mkdir -p "$d/images" "$d/volumes"
+key() { printf '%s' "$1" | tr '/:' '__'; }
+
+# flag NAME ARGS...: the value after NAME (e.g. --label).
+flag() {
+  local name=$1
+  shift
+  while [ $# -gt 0 ]; do
+    [ "$1" = "$name" ] && { printf '%s' "${2-}"; return 0; }
+    shift
+  done
+}
+
+case "${1:-}" in
+  info)
+    case "${FAKE_DOCKER_INFO:-}" in
+      denied) echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" >&2; exit 1 ;;
+      down) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
+    esac
+    echo "${FAKE_DOCKER_OS:-Ubuntu 24.04.3 LTS}"
+    ;;
+  version) echo 29.0.0 ;;
+  build)
+    image=$(flag -t "$@") label=$(flag --label "$@")
+    printf '%s\n%s\n' "$image" "$label" > "$d/images/$(key "$image")"
+    echo "sha256:fake"
+    ;;
+  image)
+    case "${2:-}" in
+      inspect) [ -f "$d/images/$(key "$3")" ] ;;
+      ls)
+        want=$(flag --filter "$@"); want=${want#label=}
+        for f in "$d"/images/*; do
+          [ -f "$f" ] || continue
+          [ "$(sed -n 2p "$f")" = "$want" ] && sed -n 1p "$f"
+        done
+        exit 0
+        ;;
+      rm) rm -f "$d/images/$(key "$3")" ;;
+    esac
+    ;;
+  volume)
+    case "${2:-}" in
+      inspect) [ -f "$d/volumes/$3" ] ;;
+      create) printf '%s\n' "$(flag --label "$@")" > "$d/volumes/${*: -1}" ;;
+      ls)
+        want=$(flag --filter "$@"); want=${want#label=}
+        for f in "$d"/volumes/*; do
+          [ -f "$f" ] || continue
+          [ "$(head -n 1 "$f")" = "$want" ] && basename "$f"
+        done
+        exit 0
+        ;;
+      rm) rm -f "$d/volumes/${*: -1}" "$d/volumes/${*: -1}.done" ;;
+    esac
+    ;;
+  run)
+    vol=$(flag -v "$@"); vol=${vol%%:*}
+    if [ "${2:-}" = -d ]; then
+      if [ "${FAKE_DOCKER_RUN_FAIL:-}" = port ]; then
+        echo "docker: Error response from daemon: failed to set up container networking: Bind for 127.0.0.1:${FAKE_PORT:-15555} failed: port is already allocated" >&2
+        : > "$d/container"
+        exit 125
+      fi
+      image=${*: -1}
+      printf 'running\n%s\n0\n' "$image" > "$d/container"
+      echo fakecontainerid
+      exit 0
+    fi
+    case " $* " in
+      *" --unpack "*)
+        zips=$(printf '%s\n' "$@" | grep ':/zips:ro$' | sed 's/:\/zips:ro$//')
+        for z in emulator system-image platform-tools; do [ -f "$zips/$z.zip" ] || { echo "no $z.zip in /zips" >&2; exit 1; }; done
+        touch "$d/volumes/$vol.done"
+        echo "devenv: SDK unpacked (5.1G)"
+        ;;
+      *" test "*) [ -f "$d/volumes/$vol.done" ] ;;
+      *" -accel-check "*)
+        a=${FAKE_DOCKER_ACCEL:-0}
+        printf 'accel:\n%s\n%s\naccel\n' "$a" "$([ "$a" = 0 ] && echo 'KVM (version 12) is installed and usable.' || echo 'KVM requires a CPU that supports vmx or svm')"
+        ;;
+    esac
+    ;;
+  inspect)
+    [ -s "$d/container" ] || { echo "error: no such object: ${*: -1}" >&2; exit 1; }
+    case "$3" in
+      *Config.Image*) sed -n 2p "$d/container" ;;
+      *)
+        state=$(sed -n 1p "$d/container") n=$(sed -n 3p "$d/container")
+        if [ "$state" = running ]; then
+          case "${FAKE_DOCKER_BOOT:-2}" in
+            exit) printf 'exited\n%s\n%s\n' "$(sed -n 2p "$d/container")" "$n" > "$d/container"; echo exited; exit 0 ;;
+          esac
+          if [ "$n" -lt "${FAKE_DOCKER_BOOT:-2}" ]; then
+            printf 'running\n%s\n%s\n' "$(sed -n 2p "$d/container")" $((n + 1)) > "$d/container"
+            echo "running starting"
+          else
+            echo "running healthy"
+          fi
+        else
+          echo "$state"
+        fi
+        ;;
+    esac
+    ;;
+  stop) [ -s "$d/container" ] && sed -i '1s/.*/exited/' "$d/container" ;;
+  rm) rm -f "$d/container" ;;
+  logs) echo "ERROR        | x86_64 emulation currently requires hardware acceleration!" ;;
+esac

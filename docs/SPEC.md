@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Current design, revised 2026-09-26 to match the implementation and the owner's decisions since the original spec, on 2026-09-27 for the Infisical secrets manager ([SECRETS.md](SECRETS.md)), and on 2026-09-28 for Tailscale on the host (D33, §6.14). The originally approved version is commit `3cd88ee`; why each thing changed is in [HANDOFF.md](HANDOFF.md). |
+| **Status** | Current design, revised 2026-09-26 to match the implementation and the owner's decisions since the original spec, on 2026-09-27 for the Infisical secrets manager ([SECRETS.md](SECRETS.md)), and on 2026-09-28 for Tailscale on the host (D33, §6.14) and the opt-in Android emulator (D34, §6.15). The originally approved version is commit `3cd88ee`; why each thing changed is in [HANDOFF.md](HANDOFF.md). |
 | **Written** | 2026-09-25, from a design interview with the owner (GitHub: `digigrant`) |
 | **Repo** | `github.com/digigrant/devenv` (public; contains no secrets) |
 | **Readers** | The owner, and agents (Firstmate's first mate and workers) changing devenv |
@@ -39,6 +39,7 @@ The environment runs **Firstmate** (an agent orchestrator) on the **herdr** back
 - Keeping chosen state across teardown: Firstmate's home and Claude's memory.
 - Tailscale on each host (D33): installing it, the one-time sign-in, and `doctor` checks. It is for Magic Conch, a phone app that will reach a hub on each machine over the tailnet. The hub itself and any `tailscale serve` or Funnel configuration are later work.
 - Warnings for drift and expiry, commands to bump versions, a host "doctor" check, and a container smoke test.
+- An opt-in Android emulator on the host that sandboxes drive with `adb` (D34, §6.15).
 
 ### Out of scope (do not build)
 - A GitHub permission system for agents. That is future work; Firstmate's merge rule covers it for now.
@@ -125,6 +126,8 @@ Docs: https://docs.docker.com/ai/sandboxes/ (source: `docker/docs`, `content/man
   - `sbx policy init allow-all|balanced|deny-all`; `sbx policy allow|deny network [--sandbox N] "hosts…"`, plus `sbx policy ls|check|log`.
   - **There is no policy file to import or export.** Rules for reproducibility therefore go in the kit (`permissions.network.allow`, scoped to one sandbox).
   - The `balanced` baseline allowed every download devenv makes (GitHub releases, npm, github.com).
+  - **Raw TCP to the host.** All of a sandbox's outbound TCP goes through the host-side proxy: HTTP(S) clients use its forward proxy, anything else is intercepted transparently, and both enforce the policy. Non-HTTP TCP (SSH, adb, databases) is allowed by a hostname or address rule; the hostname is recovered from the sandbox's DNS resolver. `host.docker.internal` (169.254.1.1 in the sandbox) reaches the host's `localhost`, and the policy resource is `localhost:<port>` (`sbx policy allow network localhost:<port>`); since sbx 0.30 that also holds for raw TCP ("Allow raw TCP to `host.docker.internal` when localhost is allowed in policy", docker/sbx-releases#211, #147), and since 0.40 a server that speaks first works too (#411). The transparent proxy accepts every TCP connection at once and only then applies the policy, so a denied or dead destination shows up as a connection that closes, not a refused connect; through the forward proxy a denied destination gets HTTP 403 with the reason (`Blocked by network policy: domain localhost:<port>`). Checked in a sandbox on 2026-09-28: SSH to an allowed `ssh.github.com:443` passes (the server's banner comes back); `host.docker.internal:<port>` without a rule is closed, and its 403 names `localhost:<port>`.
+  - **No KVM inside a sandbox** (no `vmx`/`svm`, no `/dev/kvm`). sbx's nested virtualization (`sbx settings set feature.sandbox-nested`, `--nested`) is documented for macOS on Apple Silicon M3+ only (docker/sbx-releases#497). An Android emulator therefore runs on the host (D34).
 - **Resources:** memory defaults to 50% of host memory (512 MiB–32 GiB, at most 75% of the host); CPUs default to all host CPUs; the Docker volume defaults to 10 GB.
 
 ### 2.3 Firstmate (`github.com/digigrant/firstmate`, the owner's fork of `kunchenguid/firstmate`, MIT, very active)
@@ -230,6 +233,7 @@ Researched on 2026-09-28 from Tailscale's docs (tailscale.com/docs, which serves
 | D31 | **devenv inside the sandbox is one writable clone** at `$FM_PROJECTS_DIR/devenv` (`~/fm-projects/devenv`), made by the kit's install step at create from GitHub (kit args `repo`, `ref`; default `main`; `sbx env run --kit-arg ref=<branch>` to build from a branch). The sandbox runs devenv from it (`$DEVENV_DIR`), and it is also Firstmate's project clone of devenv. Firstmate keeps it fast-forwarded while it is a clean `main`; agents work on devenv only in worktrees (rule 3). |
 | D32 | **Projects are cloned on demand.** The owner tells the first mate each project's name, URL and delivery mode once (devenv: `direct-PR`); Firstmate remembers it in its home (which persists) and clones into `~/fm-projects` when a task needs the project. |
 | D33 | **Tailscale runs on every host, in Linux:** inside the WSL 2 distro on the Windows PC, with Tailscale on Windows uninstalled (or kept stopped), and natively on a Linux PC. `devenv tailscale-setup` installs it from Tailscale's own apt repository and signs the machine in; host `doctor` checks it. Sign-in is the interactive browser sign-in of `sudo tailscale up`, once per machine: devenv never uses an auth key and stores no Tailscale secret. MagicDNS and HTTPS certificates are turned on once, in the admin console, for the Magic Conch hub's later `tailscale serve`. Owner's decision, 2026-09-28 (their option B: "Move it into WSL and let devenv manage it, taking it off Windows"). |
+| D34 | **Android emulator: opt-in, on the host, driven from sandboxes over adb** (owner, 2026-09-28). `devenv emulator start` runs one headless emulator per host in a Docker Engine container with `/dev/kvm`, on demand (never always-on), with its adb port published on the host's `127.0.0.1` only (`ANDROID_EMULATOR_PORT`, default 15555). Sandboxes reach it at `host.docker.internal:<port>` through **one host-wide policy rule the owner adds once**, `sbx policy allow network localhost:<port>` (documented, not run by devenv, and not a kit rule: the emulator is opt-in per host, and a global rule survives sandbox rebuilds). The image is devenv's own, following Google's emulator container recipe, built from Google's zips pinned by sha256 (§6.15); the SDK lives in a Docker volume. Sandboxes get Google's platform-tools (`adb`), pinned. It is Docker's port publishing on the host, not an sbx published port (D23 is unchanged). GitHub Actions emulator setup belongs to each app's own repository. |
 
 ---
 
@@ -280,6 +284,8 @@ cd ~/devenv && sbx env run
 | Claude transcripts, todos | `~/.claude/*` volumes | no | no |
 | Warnings cache, logs | `~/.cache/devenv/` | no | n/a |
 | Tailscale (host) | the `tailscale` package; tailscaled keeps its own state (the machine's key) in `/var/lib/tailscale` | yes (host) | no: each machine signs in once (§6.14) |
+| adb (platform-tools) | `~/.local/share/android-sdk` (sandbox disk; `ANDROID_HOME`) | no (installed again at create) | n/a |
+| Android emulator image and SDK volume | the host's Docker Engine (`devenv-android-emulator:*`, `devenv-android-sdk-*`) | yes (host) | no |
 
 ---
 
@@ -302,9 +308,11 @@ devenv/
 ├── versions.env                  # every pinned version + sha256 (§6.2)
 ├── provision.sh                  # portable installer: --sbx | --plain
 ├── bin/
-│   ├── devenv                    # CLI: start | entry | check | doctor | bump | test | host-prepare | secrets-init | secret-get | tailscale-setup
+│   ├── devenv                    # CLI: start | entry | check | doctor | bump | test | host-prepare | secrets-init | secret-get | tailscale-setup | emulator
 │   └── devenv-entry              # entrypoint shim → `devenv entry`
-├── lib/                          # sourced helpers (common, tools, claude, herdr, firstmate, secrets, tailscale); lib/cmd/ one file per subcommand
+├── lib/                          # sourced helpers (common, tools, android, claude, herdr, firstmate, secrets, tailscale); lib/cmd/ one file per subcommand
+├── android/
+│   └── emulator/                 # the host emulator's image (§6.15): Dockerfile, launch.sh (its entrypoint)
 ├── agents/
 │   └── claude/
 │       ├── statusline-command.sh # VERBATIM copy of the owner's script (Appendix A.1)
@@ -326,7 +334,9 @@ devenv/
     ├── container-smoke.sh, container-inner.sh   # provision.sh --plain in ubuntu containers
     ├── sbx-sim.sh, sbx-sim-inner.sh             # the kit's install/startup in a sandbox-like container
     ├── keyring.sh, keyring-inner.sh             # the keyring code against a real gnome-keyring in a container
-    └── tailscale.sh                             # tailscale-setup and doctor's Tailscale checks against fakes
+    ├── tailscale.sh                             # tailscale-setup and doctor's Tailscale checks against fakes
+    ├── emulator.sh                              # devenv emulator against fake docker/adb/sbx and a fake adbd
+    └── emulator-image.sh                        # the emulator's real image and SDK volume (opt-in, heavy)
 ```
 
 All scripts are bash with `set -euo pipefail`, must pass shellcheck, and must be **safe to run repeatedly**.
@@ -360,8 +370,11 @@ FIRSTMATE_UPSTREAM=https://github.com/kunchenguid/firstmate
 FIRSTMATE_AUTO_UPDATE=on              # on|off (D30)
 FM_PROJECTS_DIR='$HOME/fm-projects'   # expanded at runtime; the sandbox's devenv clone is <this>/devenv
 PLAIN_WORKSPACE_DIR='$HOME/dev'       # plain mode only: holds Firstmate's home and state
+ANDROID_EMULATOR_PORT=15555           # the host emulator's adb port on 127.0.0.1 (D34); the policy rule is localhost:<this>
+ANDROID_EMULATOR_MEMORY=4096          # its guest RAM in MB; 4096 is the least the API 36 image boots with
+ANDROID_EMULATOR_CORES=4              # its guest CPU cores
 ```
-A few values can be overridden from the environment for one run (`WARN_DAYS`, `DEVENV_STATUSLINE_WARNINGS`, `ANTHROPIC_TOKEN_EXPIRES`, `CLAUDE_AUTH`, `FIRSTMATE_REPO`, `FIRSTMATE_AUTO_UPDATE`, `PLAIN_WORKSPACE_DIR`, `SECRET_REFRESH`, `SECRET_REFRESH_CLAUDE`, `SECRET_REFRESH_GITHUB`).
+A few values can be overridden from the environment for one run (`WARN_DAYS`, `DEVENV_STATUSLINE_WARNINGS`, `ANTHROPIC_TOKEN_EXPIRES`, `CLAUDE_AUTH`, `FIRSTMATE_REPO`, `FIRSTMATE_AUTO_UPDATE`, `PLAIN_WORKSPACE_DIR`, `SECRET_REFRESH`, `SECRET_REFRESH_CLAUDE`, `SECRET_REFRESH_GITHUB`, `ANDROID_EMULATOR_PORT`, `ANDROID_EMULATOR_MEMORY`, `ANDROID_EMULATOR_CORES`).
 
 The refresh settings take exactly what sbx's `--refresh` takes (checked against sbx 0.45.1): `on-demand`, or a Go duration such as `55m`, `10m`, `1h30m` or `90s`. `host-prepare` and host `doctor` reject anything else with the setting's name, before touching the keyring, Infisical or sbx. `SECRET_REFRESH` must not be empty.
 
@@ -374,6 +387,7 @@ Shell-sourceable `KEY=value` lines, one tool per block. Architecture-specific ch
 - `TREEHOUSE_VERSION`, `TREEHOUSE_SHA256_*`; `NO_MISTAKES_VERSION`, `NO_MISTAKES_SHA256_*`;
 - `NPM_GH_AXI`, `NPM_CHROME_DEVTOOLS_AXI`, `NPM_TASKS_AXI`, `NPM_QUOTA_AXI`;
 - `NODE_MIN_VERSION` (22.19.0), `NODE_VERSION` + `NODE_SHA256_*` (plain mode installs it only if node is missing or older);
+- Android, from Google's SDK repository (`dl.google.com/android/repository`, which publishes only SHA-1s; the sha256s are devenv's, computed by `devenv bump`, which also checks Google's SHA-1): `ANDROID_PLATFORM_TOOLS_VERSION` + `_SHA256` (adb, x86_64 Linux only); for the host emulator `ANDROID_EMULATOR_VERSION`, `_BUILD`, `_SHA256`, the system image `ANDROID_SYSTEM_IMAGE_API`, `_TAG`, `_REVISION`, `_ZIP`, `_SHA256`, and `ANDROID_EMULATOR_BASE_IMAGE` (ubuntu, pinned by digest);
 - `TEST_SHELLCHECK_IMAGE` (pinned by digest).
 
 Every download must be verified against its sha256 before installing. **No `curl | sh`.** The single documented exception is installing Claude Code in plain mode when it's missing (§6.3), because it updates itself anyway. apt packages aren't pinned: apt verifies them against their repository's key, `gh`'s key is GitHub's keyring, fetched over HTTPS from `cli.github.com` as GitHub documents (§6.3 step 1), and on the host Tailscale's key comes over HTTPS from `pkgs.tailscale.com` as Tailscale documents (§6.14).
@@ -381,12 +395,13 @@ Every download must be verified against its sha256 before installing. **No `curl
 ### 6.3 `provision.sh [--sbx|--plain] [--yes] [--git-identity bot|skip] [--skip-claude-install]`
 The mode is auto-detected when no flag is given: `--sbx` if `IS_SANDBOX=1` or `SANDBOX_NAME` is set, otherwise `--plain`. The git identity defaults to `bot` in sbx mode and `skip` in plain mode. Every step is idempotent: a second run changes nothing and exits 0. devenv runs from the checkout that holds `provision.sh` (in sbx mode, the sandbox's clone).
 
-1. **System packages.** Install via apt what's missing: `git curl jq ca-certificates tar python3`. **Never install tmux.** Use sudo only when needed. Then, in both modes, install `gh` from GitHub's own apt repository, set up as GitHub documents for Debian/Ubuntu: the keyring `https://cli.github.com/packages/githubcli-archive-keyring.gpg` at `/etc/apt/keyrings/githubcli-archive-keyring.gpg` and the source `/etc/apt/sources.list.d/github-cli.list` (`deb [arch=… signed-by=<that keyring>] https://cli.github.com/packages stable main`). When the keyring or source differs, or the installed `gh` isn't apt's candidate from that repository, confirm (unless `--yes`), write them, `apt-get update` and `apt-get install gh`. This installs GitHub's current release, and in sbx mode replaces the image's older Ubuntu `gh` (2.46, which lacks `gh api --slurp`). `gh` isn't pinned. A failed download or apt run warns and leaves `gh` as it is.
+1. **System packages.** Install via apt what's missing: `git curl jq ca-certificates tar unzip python3`. **Never install tmux.** Use sudo only when needed. Then, in both modes, install `gh` from GitHub's own apt repository, set up as GitHub documents for Debian/Ubuntu: the keyring `https://cli.github.com/packages/githubcli-archive-keyring.gpg` at `/etc/apt/keyrings/githubcli-archive-keyring.gpg` and the source `/etc/apt/sources.list.d/github-cli.list` (`deb [arch=… signed-by=<that keyring>] https://cli.github.com/packages stable main`). When the keyring or source differs, or the installed `gh` isn't apt's candidate from that repository, confirm (unless `--yes`), write them, `apt-get update` and `apt-get install gh`. This installs GitHub's current release, and in sbx mode replaces the image's older Ubuntu `gh` (2.46, which lacks `gh api --slurp`). `gh` isn't pinned. A failed download or apt run warns and leaves `gh` as it is.
 2. **Node.** Require node ≥ `NODE_MIN_VERSION`. In plain mode, install the pinned Node tarball if node is missing or older. In sbx mode it's preinstalled; just check it.
 3. **Pinned binaries.** Put `herdr`, `treehouse` and `no-mistakes` in `~/.local/bin`. Pick the asset for the architecture, download from GitHub Releases, verify the sha256, and install atomically. Skip any tool whose `--version` already matches.
+3b. **adb.** On x86_64, Google's platform-tools at `ANDROID_PLATFORM_TOOLS_VERSION` (sha256-verified) in `~/.local/share/android-sdk/platform-tools`, with `adb` linked into `~/.local/bin`. Skipped when its `adb --version` matches; on other architectures skipped with a note (Google publishes platform-tools for x86_64 Linux only).
 4. **npm globals.** Install the pinned versions globally into the existing npm global prefix (plain mode: a user prefix under `~/.local` if that isn't writable). **Do not install a browser.** (The tools' `setup hooks` commands run in step 10.)
 5. **Claude Code.** In sbx mode, it's preinstalled; leave it. In plain mode, if it's missing, download the official installer to a file and run it (the documented exception; logs a notice).
-6. **Environment.** Write one managed block of exports, idempotently, to `/etc/sandbox-persistent.sh` (sbx) or `~/.config/devenv/env.sh` sourced from `~/.bashrc` (plain): `DEVENV_DIR` (this checkout), `FM_HOME`, `FM_PROJECTS_OVERRIDE`, `DEVENV_STATE_DIR`, `NO_MISTAKES_TELEMETRY=off` (no-mistakes sends no telemetry), `NPM_CONFIG_PREFIX` when set, and PATH additions for `~/.local/bin` and `$DEVENV_DIR/bin`. Guard the block with markers (`# >>> devenv >>>` / `# <<< devenv <<<`) and **never include completion scripts**. In sbx mode also install `/usr/local/bin/devenv-entry` with this checkout baked in.
+6. **Environment.** Write one managed block of exports, idempotently, to `/etc/sandbox-persistent.sh` (sbx) or `~/.config/devenv/env.sh` sourced from `~/.bashrc` (plain): `DEVENV_DIR` (this checkout), `FM_HOME`, `FM_PROJECTS_OVERRIDE`, `DEVENV_STATE_DIR`, `NO_MISTAKES_TELEMETRY=off` (no-mistakes sends no telemetry), `NPM_CONFIG_PREFIX` when set, `ANDROID_HOME` (x86_64: `~/.local/share/android-sdk` unless already set), and PATH additions for `~/.local/bin` and `$DEVENV_DIR/bin`. Guard the block with markers (`# >>> devenv >>>` / `# <<< devenv <<<`) and **never include completion scripts**. In sbx mode also install `/usr/local/bin/devenv-entry` with this checkout baked in.
 7. **Git identity.** With `--git-identity bot`, set `git config --global user.name "$BOT_LOGIN"` and `user.email "$BOT_EMAIL"`.
 8. **Firstmate.** If `$FM_HOME` doesn't exist (or is empty): `git clone $FIRSTMATE_REPO "$FM_HOME"` (the fork's `main`). A failed clone warns instead of failing the create. If it exists: **don't touch the code** (updates happen at first-mate start, D30). Then copy each file from `devenv/firstmate/config/` into `$FM_HOME/config/` **only if it is absent there**.
 9. **herdr config.** Install `herdr/config.toml` to `~/.config/herdr/config.toml` (keeping a differing user copy as `.bak`) and the detection override to `~/.config/herdr/agent-detection/claude.toml` (sha256-checked).
@@ -436,7 +451,7 @@ Arguments are ignored (the parent kit's flags may be passed to the entrypoint). 
 Writes one warning per line to `~/.cache/devenv/warnings`, and an empty file when all is well. Without `--quiet` it also prints them, plus notes. Always exits 0. Checks:
 1. **Firstmate.** Warn when `$FM_HOME` has commits its fork's `main` (as last fetched) doesn't; note when it is merely behind. Warn when the last automatic sync or update failed, stopped, or skipped a dirty/diverged clone; note otherwise. Warn when the clone's `origin` isn't `FIRSTMATE_REPO`.
 2. **devenv clone.** Note which branch and commit devenv runs from; in sbx mode, warn when that clone has uncommitted changes.
-3. **Tool versions.** `herdr`, `treehouse`, `no-mistakes` and the four npm packages against `versions.env`; `node` against the minimum.
+3. **Tool versions.** `herdr`, `treehouse`, `no-mistakes`, the four npm packages and (x86_64) `adb` against `versions.env`; `node` against the minimum.
 4. **herdr detection override.** Warn when it isn't installed, or when `HERDR_VERSION` differs from the herdr version it was tested with.
 5. **GitHub token.** Read the `github-authentication-token-expiration` header from `https://api.github.com/user` (5-second timeout). Warn within `WARN_DAYS` or on HTTP 401; note "no expiry" when the header is absent.
 6. **Anthropic token.** Only when `ANTHROPIC_TOKEN_EXPIRES` is set: warn within `WARN_DAYS`.
@@ -447,7 +462,8 @@ Operates on a writable devenv checkout: `--repo PATH`, defaulting to the checkou
 - `devenv bump herdr <version>`: fetches the release asset digests from the GitHub API and updates the version and both sha256 values. **Warns loudly** if `<version>` isn't listed in the verified herdr versions in `$FM_HOME/docs/herdr-backend.md`.
 - `devenv bump herdr-manifest <commit|latest>`: the detection override from herdr's repo, with its sha256.
 - `devenv bump treehouse|no-mistakes <version|latest>`, `devenv bump npm <pkg> <version|latest>`, `devenv bump node <version|latest-lts>`.
-- `devenv bump --list`: a table of pinned vs. latest versions (and upstream Firstmate vs. the fork). Read-only.
+- Android (§6.15), from Google's repository index (stable channel), downloading each file to check Google's SHA-1 and compute the sha256: `devenv bump platform-tools <version|latest>`, `devenv bump android-emulator <build|latest>`, `devenv bump android-system-image <api> [tag]` (x86_64; the tag defaults to the pinned one), and `devenv bump android-base-image [image:tag]` (the digest, from `docker buildx imagetools inspect`).
+- `devenv bump --list`: a table of pinned vs. latest versions (and upstream Firstmate vs. the fork, and the Android pins). Read-only.
 
 ### 6.9 Secrets, `sbxenv.yaml` and `host-prepare`
 ```yaml
@@ -512,6 +528,7 @@ It detects where it's running and exits 1 when any check fails.
   - The checkout is clean, on `main`, and not behind `origin/main` (warn).
   - When `/proc/version` contains "microsoft", a note that this is WSL and Docker supports the Linux `sbx` there only "best-effort".
   - **Tailscale** (§6.14), never needing root and changing nothing, each failure with its fix: on WSL, systemd is the init (else the `/etc/wsl.conf` fix) and Tailscale isn't running on Windows (FAIL when it runs; a warning when it is installed but stopped, or when `sc.exe` doesn't answer); the `tailscale` package is installed (FAIL: run `devenv tailscale-setup`) from Tailscale's apt source (warn); tailscaled is active (FAIL: `sudo systemctl enable --now tailscaled`) and enabled at boot (warn); the machine is signed in (FAIL with `sudo tailscale up`, plus the pending sign-in link when there is one; also for `NeedsMachineAuth` and `Stopped`); a key expiring within `WARN_DAYS` (warn); MagicDNS and HTTPS certificates on for the tailnet (warn each, with the admin console's DNS page).
+  - **Android emulator (optional, §6.15).** What isn't set up is a note, a started emulator that doesn't work is a FAIL, prerequisites that stop it are warnings, each with its fix: x86_64; Docker Engine installed (a note when not), answering, usable by the user, and not Docker Desktop; `/dev/kvm`; the image and SDK volume for the current pins; when both exist and it isn't running, the emulator's own `-accel-check` in a container with `/dev/kvm`; the container's state (running and booted with adb answering on `127.0.0.1:<port>`, still booting, lost its device, or stopped); `sbx policy check network --sandbox dev localhost:<port>` (a warning with the `sbx policy allow network` command when denied).
   - Print the D28 operating rule.
 - **In the sandbox or plain mode:**
   - every tool is present at its pinned version; tmux is not installed;
@@ -521,16 +538,19 @@ It detects where it's running and exits 1 when any check fails.
   - the herdr server responds, and its Claude detection comes from the local override;
   - `$FM_HOME` exists, and Firstmate's detect-only bootstrap reports no `MISSING`, `NEEDS_GH_AUTH` or `BACKEND_INVALID`;
   - the settings overlay and effort are applied, the status line checksum matches, the memory hook and skill links are in place;
+  - `adb` at its pinned version (x86_64); whether the host's emulator answers (a note, since it is normally stopped), and if not, why (§6.15);
   - print the output of `devenv check`.
 
-### 6.13 `devenv test [--image IMG]… [--no-containers] [--no-shellcheck]`
+### 6.13 `devenv test [--image IMG]… [--no-containers] [--no-shellcheck] [--emulator-image]`
 1. `tests/statusline-identity.sh`: feed fixture JSON into the original script and into the wrapper (empty warnings cache) and assert byte-identical output; the marker appears when the cache isn't empty and disappears with `DEVENV_STATUSLINE_WARNINGS=off`.
 2. `tests/secrets.sh`: `secret-get`, `secrets-init` (on a pseudo-terminal), `doctor` and `host-prepare` with fake `secret-tool`, `busctl`, `curl` and `sbx` first on `PATH`, dummy values and a temporary `HOME` (SECRETS.md §6.9). It asserts that stdout is exactly the value, that no file under `HOME` or `TMPDIR` changes, that no dummy secret or identity detail appears in any command's arguments, that a locked keyring, missing entries and HTTP errors each fail with one stderr line (a locked keyring without calling `secret-tool`), that an unconfigured name is refused, and that a rejected login is tried only once.
+   `tests/emulator.sh`: `devenv emulator` with fake `docker`, `adb` and `sbx` first on `PATH`, a stand-in KVM device, dummy SDK zips whose sha256s replace the pins in a copy of the tree, and a small adbd (python3) on `127.0.0.1`: start (image, SDK volume, the `docker run` flags, boot wait, the policy hint), a second start, status, the doctor section, stop, restart, the failures (taken port, a crash while booting, no KVM, no Docker access, Docker Desktop, bad settings, inside a sandbox), a new pin, clean; connect, run (`ANDROID_SERIAL`, exit status, the lock not inherited, a second run waiting), booting, authorization and nothing answering. Inside a Docker Sandbox it also asks the real proxy about `localhost:15555`.
 3. `tests/tailscale.sh`: `tailscale-setup` and doctor's Tailscale checks with fake `tailscale`, `systemctl`, `sc.exe`, `apt-get`, `dpkg-query`, `sudo` and `curl` first on `PATH`, and `DEVENV_HOST_ROOT` standing a folder in for `/`. It covers a new Ubuntu and Debian machine (the key, the source, the apt and systemctl calls, exactly `sudo tailscale up`, no auth key, nothing written under `HOME`), a second run that changes nothing and runs no sudo, every stop before installing (no terminal, a sandbox, an unsupported release, a failed download, no systemd, Tailscale running on Windows), and each doctor result.
 4. shellcheck on every script (installed shellcheck, or the pinned image).
 5. For `ubuntu:24.04` and `ubuntu:26.04`: a container with the repo mounted read-only and a non-root user with sudo runs `provision.sh --plain --yes --git-identity skip --skip-claude-install`, then asserts the versions, a clean second run, and that `devenv check` exits 0 with no warnings.
 6. `tests/sbx-sim.sh`: an `ubuntu:26.04` container laid out like a Docker Sandbox (uid-1000 `agent`, the workspace at `<home>/devenv/dev`, an agent-owned `/etc/sandbox-persistent.sh`) runs the kit's own install snippet as root, cloning devenv from a git copy of the working tree, then the startup snippet as the agent. It asserts the clone, the root-to-agent handoff, ownership, skill links, the hooks, the entrypoint, and a clean second install.
 7. `tests/keyring.sh`: an `ubuntu:26.04` container with gnome-keyring, `secret-tool` and `busctl` (only Infisical, GitHub and sbx faked) runs `secrets-init`, then `secret-get` unlocked and locked, while `dbus-monitor` records the Secret Service calls: a locked keyring must fail with the one-line message using only `SearchItems` (no `Unlock` or `Prompt`), and host-prepare's unlock step must call `Unlock` and `Prompt`, then stop with instructions when no display is available.
+8. Only with `--emulator-image`: `tests/emulator-image.sh` runs `devenv emulator start` in host mode with the real Docker (downloads about 2.2 GB, about 6 GB of Docker disk): the image builds, the SDK volume unpacks and is complete, and the emulator finds its system image and boots (with KVM) or stops at its hardware checks (without); then `clean`. It refuses to run beside an existing devenv emulator.
 
 `--no-containers` runs only 1 to 4. **Proxy note:** inside the sandbox, test containers use `--network host` and get `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and the proxy CA (`PROXY_CA_CERT_B64` → `update-ca-certificates`), **only when those variables are present**.
 
@@ -544,6 +564,24 @@ Host only (`lib/cmd/tailscale-setup.sh`, helpers in `lib/tailscale.sh`), interac
 5. **Report** from `tailscale status --json`: the machine's MagicDNS name, first address and tailnet, its key expiry (a warning within `WARN_DAYS`), and a warning with the admin console's DNS page for MagicDNS or HTTPS certificates while either is off.
 
 A run with everything in place downloads the key to compare it and changes nothing: no sudo, no apt, no sign-in. host `doctor` reports the same state without root (§6.12). `host-prepare` doesn't look at Tailscale, so a machine without it still runs its sandbox. The files it reads and writes (`/etc/os-release`, `/etc/wsl.conf`, `/proc/version`, `/run/systemd/system`, the apt key and source) go through `host_path`, so `tests/tailscale.sh` can stand a folder in for `/` with `DEVENV_HOST_ROOT`.
+
+### 6.15 `devenv emulator` (D34)
+**On the host** (`start`, `stop`, `clean` refuse inside a sandbox):
+- **`start`** needs x86_64, valid settings (§6.1), `/dev/kvm` and Docker Engine (not Docker Desktop, whose containers get no `/dev/kvm`); it stops at the first problem with its fix. Then:
+  1. **Image** `devenv-android-emulator:<12 hex>`, tagged by a hash of `android/emulator/Dockerfile`, `launch.sh` and `ANDROID_EMULATOR_BASE_IMAGE`: built when missing, from a temporary context holding only those two files (`--label devenv.android-emulator=image`). It holds the emulator's runtime libraries, `socat`, `unzip` and `launch.sh` (under 0.5 GB). Older devenv emulator images are removed.
+  2. **SDK volume** `devenv-android-sdk-api<api>-<12 hex>`, named by a hash of the SDK pins: when missing, or without `launch.sh`'s completion marker, download the emulator, the system image and platform-tools (about 2.2 GB) into `~/.cache/devenv/android-emulator`, verify each sha256 (a file that already matches is reused), and have the image unpack them into the volume (`launch.sh --unpack system-images/android-<api>/<tag>`, about 5 GB); then delete the downloads and remove older SDK volumes. Keeping the SDK out of the image leaves no multi-GB build context or build cache behind.
+  3. **Container** `devenv-android-emulator`: `docker run -d --init --device /dev/kvm -p 127.0.0.1:<port>:6555 -v <volume>:/android/sdk -e EMULATOR_MEMORY -e EMULATOR_CORES`. No restart policy. A taken port is reported with the setting to change.
+  4. Wait (up to 15 minutes) until Docker reports the container healthy, i.e. Android booted; if it stops, print its last log lines. Then check adb on `127.0.0.1:<port>` and the policy (`sbx policy check network --sandbox dev localhost:<port>`), printing the `sbx policy allow network localhost:<port>` command when it is denied, and how to use and stop it.
+  An already running emulator is reused (with a warning when it runs an older image).
+- **`launch.sh`** (the container's entrypoint, as root): writes a fresh AVD (x86_64, 1080×2400 at 420 dpi, software GPU, no audio, cameras or SD card), forwards the container's port 6555 to the emulator's loopback-only adb port 5557 with `socat` (6555 is outside the range adb scans for local emulators), and execs `emulator -avd devenv -ports 5556,5557 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -no-metrics -skip-adb-auth -gpu swiftshader_indirect -accel on -memory … -cores …`. A background step waits for `sys.boot_completed`, turns animations off and writes the marker the health check reads (with `adb get-state` from inside the container).
+- **`stop`** stops and removes the container (image and volume stay). **`clean`** also removes every devenv emulator image, SDK volume and the download cache.
+- **`status`** prints the host report that `doctor` uses (§6.12) and exits 1 on a failure.
+
+**In the sandbox or plain mode** (the emulator is at `host.docker.internal:<port>` from a sandbox, `127.0.0.1:<port>` otherwise):
+- A probe opens a TCP connection and sends adb's `CNXN` message: `CNXN` back means adbd accepts the connection, `AUTH` that it wants key authorization, anything else that nothing answers. (A plain TCP connect proves nothing from a sandbox, whose proxy accepts every connection first, and `adb connect` then reports "failed to connect" after 10 seconds and leaves an offline entry.) When nothing answers from a sandbox, an HTTP request through the forward proxy tells a missing policy rule (403 "Blocked…", with the `sbx policy allow network localhost:<port>` fix) from an emulator that isn't running (`devenv emulator start` on the host).
+- **`connect`**: probe, drop a stale offline entry, `adb connect`, wait for the device, require `sys.boot_completed`; prints only the serial on stdout.
+- **`run -- CMD…`**: connect, take an exclusive `flock` on `${XDG_RUNTIME_DIR:-/tmp}/devenv-android-emulator.lock` (saying so when it waits), and run CMD with `ANDROID_SERIAL` set and the lock's descriptor closed for it (so a Gradle daemon doesn't keep the lock); exits with CMD's status.
+- **`status`**: `adb`'s version and the probe, with the reason when nothing answers.
 
 ---
 
@@ -566,6 +604,7 @@ A run with everything in place downloads the key to compare it and changes nothi
 | V11 | H | Which extra domains does `balanced` block? | None for devenv's downloads (first host create). `herdr.dev` must stay blocked. |
 | V12 | A/H | Does Firstmate's bootstrap pass in `dev`? | In-sandbox: nothing missing except the optional `PRESENTATION_UNAVAILABLE: lavish-axi`. Host check pending. |
 | V13 | H | Do `devenv tailscale-setup` and doctor's Tailscale checks work on the WSL 2 PC and on the Linux laptop, and does Tailscale traffic from WSL work once Tailscale is off Windows? | Built and tested against fakes (`tests/tailscale.sh`); `pkgs.tailscale.com` is blocked in the sandbox, so the real install, sign-in and checks are pending on each host: HOST-VERIFY §10. |
+| V14 | A/H | Can a sandbox drive an Android emulator on the host over adb (D34)? | In-sandbox: raw non-HTTP TCP passes the proxy to an allowed destination; `host.docker.internal:<port>` is refused until `localhost:<port>` is allowed; the real image builds, the SDK volume unpacks and the emulator gets to its hardware checks without KVM (`tests/emulator-image.sh`). Pending on the host (HOST-VERIFY §11): Android boots in the container under WSL2 and on native Linux, adb reaches it from the sandbox once the rule is added, and a test runs. |
 
 ---
 
@@ -588,6 +627,7 @@ A run with everything in place downloads the key to compare it and changes nothi
 - [ ] **AC15** No `herdr.dev` allowance; herdr's update and manifest checks are off; tmux is not installed.
 - [ ] **AC16** Nothing in the repo hardcodes `/home/gejoy` or `/home/agent`, except in test fixtures, tests and docs.
 - [ ] **AC17** On the WSL 2 PC (Tailscale off Windows) and on a native Linux host, `devenv tailscale-setup` installs Tailscale from Tailscale's apt repository and signs the machine in through one browser sign-in; a second run changes nothing and asks for no sudo; host `doctor`'s Tailscale lines all pass once MagicDNS and HTTPS certificates are on; and it FAILs with the fix when tailscaled is stopped (HOST-VERIFY §10).
+- [ ] **AC18** On a host with Docker Engine and the policy rule, `devenv emulator start` boots Android, `devenv emulator run -- adb shell getprop ro.build.version.sdk` in the sandbox prints the pinned API level, and `devenv emulator stop` frees the memory.
 
 ---
 
@@ -618,6 +658,7 @@ A run with everything in place downloads the key to compare it and changes nothi
 11. The machine identity `sbx-host` reads only the agent project, as Viewer.
 12. Every `command:` and `--command` holds only a path and a secret name, because sbx stores command text in plain text (§2.2).
 13. No Tailscale auth key, or any other Tailscale secret, in the repo, in `devenv.conf`, on a command line or in a file devenv writes. Each machine signs in interactively in a browser (D33).
+14. The Android emulator's adb port (it skips adb authorization) is published on the host's `127.0.0.1` only, never on another interface, and its container gets `/dev/kvm` and nothing more privileged.
 
 ---
 
@@ -629,6 +670,7 @@ A run with everything in place downloads the key to compare it and changes nothi
 - A second worker harness (e.g. Codex), which needs `config/crew-harness` and its install.
 - Bumping herdr past 0.8.0 once Firstmate verifies newer versions.
 - v3 kits, once a v3 Claude workload is available to build on: a v3 kit can declare where Claude reads skills, so the sbx store could replace the links.
+- An Android build toolchain in the sandbox (a JDK, `sdkmanager`, SDK packages), if phone-app projects don't bring their own; more than one emulator (API levels, concurrent runs).
 
 ---
 

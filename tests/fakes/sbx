@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fake sbx for tests/secrets.sh: logs its argv to $FAKE_LOG/argv and succeeds.
+# Fake sbx for tests/secrets.sh and tests/emulator.sh: logs its argv to
+# $FAKE_LOG/argv and succeeds.
 # `secret ls --json`, `secret set-custom` and `secret rm` keep one sandbox-
 # scoped custom secret (CLAUDE_CODE_OAUTH_TOKEN) whose placeholder is in
 # $FAKE_LOG/sbx-placeholder, and behave as sbx 0.45.1 does (checked against
@@ -7,7 +8,8 @@
 # is refused, and rm without --sandbox looks only at global secrets.
 # `secret set` (a service secret) just succeeds, as sbx does after running the
 # command once. FAKE_SBX_LS replaces the `secret ls` output; FAKE_SBX_FAIL=ls
-# or FAKE_SBX_FAIL=set makes that subcommand fail.
+# or FAKE_SBX_FAIL=set makes that subcommand fail. `policy check network`
+# answers FAKE_SBX_POLICY (allowed, or denied by default) for tests/emulator.sh.
 set -euo pipefail
 printf 'sbx %s\n' "$*" >> "$FAKE_LOG/argv"
 store=$FAKE_LOG/sbx-placeholder
@@ -62,4 +64,14 @@ case "${1:-} ${2:-}" in
     fi
     ;;
   "ls "*) echo '[]' ;;
+  "policy check")
+    # FAKE_SBX_POLICY=allowed|denied (default denied): the answer for any target.
+    target=${*: -1}
+    if [ "${FAKE_SBX_POLICY:-denied}" = allowed ]; then
+      printf 'Allowed: %s\nGovernance: Local policy only\n' "$target"
+    else
+      printf 'Denied: %s\nGovernance: Local policy only\nReason: no matching allow rule\n' "$target"
+      exit 1
+    fi
+    ;;
 esac

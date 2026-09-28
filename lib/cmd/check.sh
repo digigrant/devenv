@@ -89,6 +89,11 @@ check_tool_versions() {
   cur=$(node_installed_version)
   if [ -z "$cur" ]; then _check_warn "node not installed (need >= $NODE_MIN_VERSION)"
   elif ! version_ge "$cur" "$NODE_MIN_VERSION"; then _check_warn "node $cur is older than $NODE_MIN_VERSION"; fi
+  if android_supported; then
+    pin=$ANDROID_PLATFORM_TOOLS_VERSION cur=$(adb_installed_version)
+    if [ -z "$cur" ]; then _check_warn "adb not installed (pinned $pin) — run provision.sh"
+    elif [ "$cur" != "$pin" ]; then _check_warn "adb $cur installed, pinned $pin — run provision.sh"; fi
+  fi
 }
 
 check_herdr_manifest() {

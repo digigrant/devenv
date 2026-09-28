@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Fake adb for tests/emulator.sh: logs its argv to $FAKE_LOG/argv and keeps the
+# connected devices as files under $FAKE_LOG/adb.
+#   FAKE_ADB_VERSION   what --version reports (default: the pinned platform-tools)
+#   FAKE_ADB_BOOTED    sys.boot_completed (default 1)
+set -euo pipefail
+printf 'adb %s\n' "$*" >> "$FAKE_LOG/argv"
+d=$FAKE_LOG/adb
+mkdir -p "$d"
+serial=''
+if [ "${1:-}" = -s ]; then serial=$2; shift 2; fi
+case "${1:-}" in
+  --version) printf 'Android Debug Bridge version 1.0.41\nVersion %s-15733141\n' "${FAKE_ADB_VERSION:-37.0.1}" ;;
+  connect) touch "$d/$2"; echo "connected to $2" ;;
+  disconnect) rm -f "$d/$2"; echo "disconnected $2" ;;
+  get-state)
+    [ -e "$d/$serial" ] || { echo "error: device '$serial' not found" >&2; exit 1; }
+    echo device
+    ;;
+  wait-for-device) [ -e "$d/$serial" ] ;;
+  shell)
+    [ -e "$d/$serial" ] || { echo "error: device '$serial' not found" >&2; exit 1; }
+    case "$*" in
+      *sys.boot_completed*) printf '%s\r\n' "${FAKE_ADB_BOOTED:-1}" ;;
+      *ro.build.version.release*) printf '16\r\n' ;;
+      *ro.build.version.sdk*) printf '36\r\n' ;;
+    esac
+    ;;
+esac

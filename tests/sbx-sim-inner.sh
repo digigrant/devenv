@@ -78,6 +78,9 @@ as_agent() { sudo -u agent -H --preserve-env=IS_SANDBOX,SANDBOX_NAME,WORKSPACE_D
 [ "$(as_agent 'herdr --version' | grep -oE '[0-9.]+$')" = "$HERDR_VERSION" ] && pass "herdr on the agent's PATH" || bad "herdr"
 [ "$(as_agent 'git -C "$FM_HOME" rev-parse HEAD')" = "$(as_agent 'git -C "$FM_HOME" rev-parse origin/main')" ] && pass "Firstmate cloned at the fork's main into the workspace" || bad "Firstmate"
 [ "$(as_agent 'echo "$DEVENV_DIR"')" = "$CLONE" ] && pass "DEVENV_DIR is the clone" || bad "DEVENV_DIR"
+[ "$(as_agent 'adb --version' | sed -n 's/^Version \([0-9.]*\).*/\1/p')" = "$ANDROID_PLATFORM_TOOLS_VERSION" ] \
+  && [ "$(as_agent 'echo "$ANDROID_HOME"')" = /home/agent/.local/share/android-sdk ] \
+  && pass "adb $ANDROID_PLATFORM_TOOLS_VERSION on the agent's PATH, ANDROID_HOME set" || bad "adb or ANDROID_HOME"
 [ "$(stat -c %U "$CLONE/.git")" = agent ] && [ -z "$(as_agent "git -C $CLONE status --porcelain")" ] && pass "the clone is the agent's and clean" || bad "the clone is not the agent's or is dirty"
 for sk in grill-me grilling; do
   [ "$(readlink "/home/agent/.claude/skills/$sk")" = "$CLONE/skills/$sk" ] && pass "skill $sk linked from the clone" || bad "skill $sk not linked"
