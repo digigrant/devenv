@@ -131,8 +131,20 @@ one_line_failure "unconfigured name" "fetches only GITHUB_GEJ_MACHINE_PAT and CL
 run SANDBOX_NAME=dev -- secret-get GITHUB_GEJ_MACHINE_PAT
 one_line_failure "inside a sandbox" "runs on the host"
 
+echo "refresh values"
+# What sbx 0.45.1's --refresh accepted and refused when tried.
+accepted=(on-demand 55m 10m 1h 1h30m 90s 1.5h .5h 5.m 2h0m0s 300ms 1ns 1µs 1μs 0 -0 +5m -5m 5m5m)
+refused=(55 5d ON-DEMAND ondemand never 55M 1e3s 1h-5m .s 1.5.5h '' 'on demand')
+verdicts=$(DEVENV_ROOT=$ROOT bash -c '. "$DEVENV_ROOT/lib/common.sh"; . "$DEVENV_ROOT/lib/secrets.sh"
+  for v in "$@"; do if refresh_value_ok "$v"; then echo "ok:$v"; else echo "no:$v"; fi; done' _ "${accepted[@]}" "${refused[@]}")
+want=$(printf 'ok:%s\n' "${accepted[@]}"; printf 'no:%s\n' "${refused[@]}")
+[ "$verdicts" = "$want" ] && pass "accepts and refuses the same values as sbx's --refresh" \
+  || { fail "refresh values differ from sbx's:"; diff <(printf '%s\n' "$want") <(printf '%s\n' "$verdicts") || true; }
+
 echo "doctor --host"
 run -- doctor --host
+printf '%s\n' "$OUT" | grep -qF 'ok    refresh: CLAUDE_CODE_OAUTH_TOKEN 55m, GITHUB_GEJ_MACHINE_PAT 55m (devenv.conf)' \
+  && pass "refresh settings: 55m for both by default" || fail "doctor's refresh line: $(printf '%s\n' "$OUT" | grep refresh)"
 if printf '%s\n' "$OUT" | grep -q 'ok    keyring entries present' \
    && printf '%s\n' "$OUT" | grep -q 'ok    GITHUB_GEJ_MACHINE_PAT authenticates as gej-machine (HTTP 200; expires 2026-12-24 00:00:00 UTC)' \
    && printf '%s\n' "$OUT" | grep -q 'ok    CLAUDE_CODE_OAUTH_TOKEN is a setup-token'; then
@@ -151,6 +163,9 @@ run FAKE_LOGIN_CODE=401 -- doctor --host
 run FAKE_KR_STATE=locked -- doctor --host
 [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q 'FAIL  keyring locked; run sbx env run' && ! grep -q '^secret-tool' "$FAKE_LOG/argv" \
   && pass "locked keyring: FAIL without opening the unlock window" || fail "doctor with a locked keyring: exit $RC"
+run SECRET_REFRESH_GITHUB=5d -- doctor --host
+[ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qF "FAIL  SECRET_REFRESH_GITHUB in devenv.conf must be on-demand or a duration such as 55m or 10m, not '5d'" \
+  && pass "an invalid SECRET_REFRESH_GITHUB: FAIL and exit 1" || fail "doctor with SECRET_REFRESH_GITHUB=5d: exit $RC"
 mkdir -p "$W/home/.config/devenv/secrets" "$W/home/.infisical/secrets-backup" && touch "$W/home/.infisical/secrets-backup/x"
 run -- doctor --host
 printf '%s\n' "$OUT" | grep -q 'warn  plain-text secret files left over' && printf '%s\n' "$OUT" | grep -q 'warn  Infisical CLI backups left over' \
@@ -158,15 +173,93 @@ printf '%s\n' "$OUT" | grep -q 'warn  plain-text secret files left over' && prin
 rm -rf "$W/home/.config/devenv/secrets" "$W/home/.infisical"
 
 echo "host-prepare"
+# The fake sbx keeps the Claude custom secret's placeholder here (tests/fakes/sbx).
+STORE=$FAKE_LOG/sbx-placeholder
+OLD_FILE=$W/home/.config/devenv/claude-oauth-placeholder
+set_custom() { grep '^sbx secret set-custom' "$FAKE_LOG/argv" || true; }
+set_flag() { set_custom | sed -n "s/.* --$1 \([^ ]*\).*/\1/p"; }
+set_github() { grep '^sbx secret set github ' "$FAKE_LOG/argv" || true; }
+github_refresh() { set_github | sed -n 's/.* --refresh \([^ ]*\).*/\1/p'; }
 run -- host-prepare
-cmd=$(grep '^sbx secret set-custom' "$FAKE_LOG/argv" || true)
+cmd=$(set_custom)
 if [ "$RC" = 0 ] && printf '%s' "$cmd" | grep -qF -- "--command $W/devenv/checkout/bin/devenv secret-get CLAUDE_CODE_OAUTH_TOKEN"; then
   pass "sets the Claude custom secret to run devenv secret-get CLAUDE_CODE_OAUTH_TOKEN"
 else fail "host-prepare: exit $RC, set-custom: ${cmd:-none}, stderr: $ERR"; fi
+first=$(set_flag placeholder)
+[[ $first =~ ^sbx-cs-devenv-[0-9a-f]{32}$ ]] && printf '%s' "$ERR" | grep -qF '(new placeholder, refresh 55m)' \
+  && grep -qx 'sbx secret ls --sandbox dev --json' "$FAKE_LOG/argv" \
+  && pass "nothing in sbx yet: asks sbx, then makes a new random placeholder" || fail "a new placeholder: '$first', stderr: $ERR"
+[ "$(set_flag refresh)" = 55m ] && [ "$(github_refresh)" = 55m ] && pass "refresh: SECRET_REFRESH's 55m for both secrets by default" \
+  || fail "refresh: Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+cmd=$(set_github)
+if printf '%s' "$cmd" | grep -qF -- "sbx secret set github --sandbox dev --command $W/devenv/checkout/bin/devenv secret-get GITHUB_GEJ_MACHINE_PAT --refresh 55m" \
+   && printf '%s' "$ERR" | grep -qF 'gej-machine token (GITHUB_GEJ_MACHINE_PAT) available to sandbox dev as the github secret (refresh 55m)' \
+   && [ "$(grep -n '^sbx secret set github ' "$FAKE_LOG/argv" | cut -d: -f1)" -lt "$(grep -n '^sbx secret set-custom' "$FAKE_LOG/argv" | cut -d: -f1)" ]; then
+  pass "sets the sandbox's github service secret to run devenv secret-get GITHUB_GEJ_MACHINE_PAT (before the Claude secret)"
+else fail "the github secret: ${cmd:-none}, stderr: $ERR"; fi
 no_leak_in_args "host-prepare"
 [ -d "$W/devenv/checkout/dev" ] && pass "created dev/" || fail "dev/ was not created"
+run -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag placeholder)" = "$first" ] && printf '%s' "$ERR" | grep -qF '(reused placeholder' \
+  && ! grep -q '^sbx secret rm' "$FAKE_LOG/argv" \
+  && pass "run again: reuses the placeholder sbx holds and removes nothing" || fail "second run: exit $RC, stderr: $ERR"
+# The collision this fixes: sbx holds a placeholder the host's old file no
+# longer matched, and set-custom with any other placeholder is refused.
+printf 'sbx-cs-KigEVVvhclOVcPb2' > "$STORE"
+mkdir -p "${OLD_FILE%/*}" && echo sbx-cs-devenv-00000000000000000000000000000000 > "$OLD_FILE"
+run -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag placeholder)" = sbx-cs-KigEVVvhclOVcPb2 ] && [ ! -e "$OLD_FILE" ] \
+  && printf '%s' "$ERR" | grep -qF 'removed ~/.config/devenv/claude-oauth-placeholder' \
+  && pass "sbx holds another placeholder: reused (no 'already exists'), and the old host file is deleted" \
+  || fail "reusing a stored placeholder: exit $RC, stderr: $ERR"
+for ls_out in 'not json' '{"secrets":[]}' '{"custom_secrets":{}}'; do
+  run FAKE_SBX_LS="$ls_out" -- host-prepare
+  [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'gave no custom_secrets list' && [ -z "$(set_custom)" ] \
+    && ! grep -q '^sbx secret rm' "$FAKE_LOG/argv" && [ "$(cat "$STORE")" = sbx-cs-KigEVVvhclOVcPb2 ] \
+    && pass "sbx secret ls says '$ls_out': stops before set-custom, deletes nothing" \
+    || fail "host-prepare with sbx secret ls output '$ls_out': exit $RC, stderr: $ERR"
+done
+run FAKE_SBX_FAIL=ls -- host-prepare
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'sbx secret ls --sandbox dev --json failed' && [ -z "$(set_custom)" ] \
+  && pass "sbx secret ls fails: stops before set-custom" || fail "host-prepare with a failing sbx secret ls: exit $RC, stderr: $ERR"
+run SECRET_REFRESH=10m -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 10m ] && [ "$(github_refresh)" = 10m ] && pass "refresh: both secrets follow SECRET_REFRESH" \
+  || fail "SECRET_REFRESH=10m: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_CLAUDE=on-demand -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = on-demand ] && [ "$(github_refresh)" = 55m ] \
+  && pass "refresh: SECRET_REFRESH_CLAUDE overrides SECRET_REFRESH for the Claude secret only" \
+  || fail "SECRET_REFRESH_CLAUDE=on-demand: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_GITHUB=5m SECRET_REFRESH=1h -- host-prepare
+[ "$RC" = 0 ] && [ "$(github_refresh)" = 5m ] && [ "$(set_flag refresh)" = 1h ] \
+  && pass "refresh: SECRET_REFRESH_GITHUB overrides SECRET_REFRESH for the GitHub secret only" \
+  || fail "SECRET_REFRESH_GITHUB=5m: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run SECRET_REFRESH_CLAUDE=' ' SECRET_REFRESH_GITHUB='' -- host-prepare
+[ "$RC" = 0 ] && [ "$(set_flag refresh)" = 55m ] && [ "$(github_refresh)" = 55m ] \
+  && pass "refresh: blank per-secret settings fall back to SECRET_REFRESH" \
+  || fail "blank per-secret settings: exit $RC, Claude '$(set_flag refresh)', GitHub '$(github_refresh)'"
+run FAKE_SBX_FAIL=set -- host-prepare
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -qF 'sbx secret set github failed: error: verify command failed' && [ -z "$(set_custom)" ] \
+  && pass "sbx secret set github fails: stops with sbx's error line, before the Claude secret" \
+  || fail "host-prepare with a failing sbx secret set: exit $RC, stderr: $ERR"
+for bad in SECRET_REFRESH_CLAUDE=5d SECRET_REFRESH_GITHUB=never SECRET_REFRESH=55; do
+  run "$bad" -- host-prepare
+  [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -qF "${bad%%=*} in devenv.conf must be on-demand or a duration such as 55m or 10m, not '${bad#*=}'" \
+    && [ ! -s "$FAKE_LOG/argv" ] && pass "$bad: rejected before the keyring, Infisical or sbx is touched" \
+    || fail "host-prepare with $bad: exit $RC, stderr: $ERR"
+done
+run SECRET_REFRESH= -- host-prepare
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -qF 'SECRET_REFRESH in devenv.conf is empty' && [ ! -s "$FAKE_LOG/argv" ] \
+  && pass "an empty SECRET_REFRESH: rejected" || fail "host-prepare with SECRET_REFRESH empty: exit $RC, stderr: $ERR"
+run CLAUDE_AUTH=login -- host-prepare
+[ "$RC" = 0 ] && grep -qx 'sbx secret rm --sandbox dev --host api.anthropic.com --env CLAUDE_CODE_OAUTH_TOKEN -f' "$FAKE_LOG/argv" \
+  && [ ! -e "$STORE" ] && [ -z "$(set_custom)" ] && [ "$(github_refresh)" = 55m ] \
+  && printf '%s' "$ERR" | grep -qF 'removed the Claude setup-token custom secret from sandbox dev (CLAUDE_AUTH=login)' \
+  && pass "login mode: removes the sandbox-scoped Claude secret (--sandbox, --host, --env); still sets github" || fail "login mode: exit $RC, stderr: $ERR"
+run CLAUDE_AUTH=login -- host-prepare
+[ "$RC" = 0 ] && grep -q '^sbx secret rm --sandbox dev' "$FAKE_LOG/argv" && ! printf '%s' "$ERR" | grep -q 'removed the Claude' \
+  && pass "login mode with nothing stored: says nothing about removing" || fail "login mode again: exit $RC, stderr: $ERR"
 run FAKE_LOGIN_CODE=401 -- host-prepare
-[ "$RC" != 0 ] && [ "$(logins)" = 1 ] && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+[ "$RC" != 0 ] && [ "$(logins)" = 1 ] && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" \
   && pass "a rejected login: stops before sbx after one login attempt" || fail "host-prepare with a rejected login: exit $RC, $(logins) login attempts"
 run FAKE_KR_STATE=locked FAKE_KR_PROMPT=accept DISPLAY=:0 -- host-prepare
 [ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'a window asks for the keyring password now' && printf '%s' "$ERR" | grep -q 'keyring unlocked' \
@@ -174,14 +267,14 @@ run FAKE_KR_STATE=locked FAKE_KR_PROMPT=accept DISPLAY=:0 -- host-prepare
   && pass "locked keyring: a lookup opens the unlock window, then host-prepare carries on" \
   || fail "host-prepare with a locked keyring and an accepted window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked DISPLAY=:0 -- host-prepare
-[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'the keyring is still locked' && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" \
+[ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'the keyring is still locked' && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" \
   && pass "locked keyring, window closed: stops before sbx" || fail "host-prepare with a dismissed window: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=locked -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'no window can ask for its password here (no DISPLAY or WAYLAND_DISPLAY)' \
   && pass "locked keyring without a display: clear instructions" || fail "host-prepare locked without a display: exit $RC, stderr: $ERR"
 run FAKE_KR_STATE=missing -- host-prepare
 [ "$RC" != 0 ] && printf '%s' "$ERR" | grep -q 'keyring entry missing' \
-  && ! grep -q '^sbx secret set-custom' "$FAKE_LOG/argv" && pass "missing entries: stops before sbx" || fail "host-prepare with missing entries: exit $RC"
+  && ! grep -q '^sbx secret set' "$FAKE_LOG/argv" && pass "missing entries: stops before sbx" || fail "host-prepare with missing entries: exit $RC"
 mkdir -p "$W/home/.config/devenv/secrets"
 run -- host-prepare
 printf '%s' "$ERR" | grep -q 'warning: plain-text secret files left over' && pass "warns about leftover secret files" || fail "no leftover warning"

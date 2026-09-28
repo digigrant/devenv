@@ -152,6 +152,48 @@ secret_name_allowed() {
   [ -n "$1" ] && { [ "$1" = "$SECRET_GITHUB" ] || [ "$1" = "$SECRET_CLAUDE" ]; }
 }
 
+# How often sbx runs `devenv secret-get` again for a secret (its --refresh):
+# SECRET_REFRESH, or the secret's own SECRET_REFRESH_<CLAUDE|GITHUB> when set.
+SECRET_REFRESH_KEYS=(SECRET_REFRESH SECRET_REFRESH_CLAUDE SECRET_REFRESH_GITHUB)
+
+trim() {
+  local s=$1
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+# What sbx 0.45.1 accepts for --refresh: on-demand, or a Go duration such as
+# 55m, 1h30m or 90s (checked against sbx itself; it also trims blanks).
+refresh_value_ok() {
+  local re='^[-+]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
+  [ "$1" = on-demand ] || [[ $1 =~ $re ]]
+}
+
+# secret_refresh claude|github: the refresh for that secret.
+secret_refresh() {
+  local own=''
+  case "$1" in
+    claude) own=$(trim "${SECRET_REFRESH_CLAUDE:-}") ;;
+    github) own=$(trim "${SECRET_REFRESH_GITHUB:-}") ;;
+  esac
+  if [ -n "$own" ]; then printf '%s' "$own"; else trim "${SECRET_REFRESH:-}"; fi
+}
+
+# Why a refresh setting in devenv.conf can't be used, one line each; nothing
+# when they are all fine.
+secret_refresh_problems() {
+  local k v
+  for k in "${SECRET_REFRESH_KEYS[@]}"; do
+    v=$(trim "${!k:-}")
+    if [ -z "$v" ]; then
+      [ "$k" != SECRET_REFRESH ] || echo "SECRET_REFRESH in devenv.conf is empty; set it to a duration such as 55m, or on-demand"
+    elif ! refresh_value_ok "$v"; then
+      echo "$k in devenv.conf must be on-demand or a duration such as 55m or 10m, not '$v'"
+    fi
+  done
+  return 0
+}
+
 # infisical_get NAME: prints NAME's value from Infisical, followed by a
 # newline (like `cat` of the old secret file). Dies with one line on stderr on
 # any failure.

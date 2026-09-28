@@ -1,7 +1,65 @@
 #!/usr/bin/env bash
 # Fake sbx for tests/secrets.sh: logs its argv to $FAKE_LOG/argv and succeeds.
+# `secret ls --json`, `secret set-custom` and `secret rm` keep one sandbox-
+# scoped custom secret (CLAUDE_CODE_OAUTH_TOKEN) whose placeholder is in
+# $FAKE_LOG/sbx-placeholder, and behave as sbx 0.45.1 does (checked against
+# it): set-custom with the stored placeholder updates it, any other placeholder
+# is refused, and rm without --sandbox looks only at global secrets.
+# `secret set` (a service secret) just succeeds, as sbx does after running the
+# command once. FAKE_SBX_LS replaces the `secret ls` output; FAKE_SBX_FAIL=ls
+# or FAKE_SBX_FAIL=set makes that subcommand fail.
 set -euo pipefail
 printf 'sbx %s\n' "$*" >> "$FAKE_LOG/argv"
-case "${1:-}" in
-  ls) echo '[]' ;;
+store=$FAKE_LOG/sbx-placeholder
+
+# flag NAME ARGS...: the value after --NAME.
+flag() {
+  local name=$1
+  shift
+  while [ $# -gt 0 ]; do
+    [ "$1" = "--$name" ] && { printf '%s' "${2-}"; return 0; }
+    shift
+  done
+}
+
+case "${1:-} ${2:-}" in
+  "secret ls")
+    [ "${FAKE_SBX_FAIL:-}" != ls ] || { echo "error: fake sbx secret ls failure" >&2; exit 1; }
+    if [ -n "${FAKE_SBX_LS+x}" ]; then printf '%s\n' "$FAKE_SBX_LS"; exit 0; fi
+    if [ -s "$store" ]; then
+      jq -nc --arg scope "$(flag sandbox "$@")" --arg ph "$(cat "$store")" \
+        '{secrets: [], custom_secrets: [{scope: $scope, targets: ["api.anthropic.com"], env: "CLAUDE_CODE_OAUTH_TOKEN",
+          placeholder: $ph, kind: "command", source: "fake", refresh: "55m"}], shadowed_services: [], env_only_count: 0}'
+    else
+      echo '{"secrets":[],"custom_secrets":[],"shadowed_services":[],"env_only_count":0}'
+    fi
+    ;;
+  "secret set")
+    if [ "${FAKE_SBX_FAIL:-}" = set ]; then
+      echo "error: verify command failed (exit_status): command: exit status 1; use --no-verify to store without resolving now" >&2
+      echo "  try: sbx secret set --help" >&2
+      exit 1
+    fi
+    echo "Verified: command resolved successfully."
+    echo "Saved command secret for service \"${3:-}\" in scope \"$(flag sandbox "$@")\""
+    ;;
+  "secret set-custom")
+    ph=$(flag placeholder "$@") scope=$(flag sandbox "$@")
+    if [ -s "$store" ] && [ "$(cat "$store")" != "$ph" ]; then
+      echo "error: custom secret env \"CLAUDE_CODE_OAUTH_TOKEN\" already exists in scope \"$scope\" with placeholder \"$(cat "$store")\"" >&2
+      exit 1
+    fi
+    printf '%s' "$ph" > "$store"
+    echo "Saved custom secret placeholder \"$ph\" for target \"api.anthropic.com\" env \"CLAUDE_CODE_OAUTH_TOKEN\" in scope \"$scope\""
+    ;;
+  "secret rm")
+    scope=$(flag sandbox "$@")
+    if [ -n "$scope" ] && [ -s "$store" ]; then
+      rm -f "$store"
+      echo "Deleted 1 custom secret(s) for target \"api.anthropic.com\" env \"CLAUDE_CODE_OAUTH_TOKEN\" in scope \"$scope\""
+    else
+      echo "No custom secret found for target \"api.anthropic.com\" env \"CLAUDE_CODE_OAUTH_TOKEN\" in scope \"${scope:-(global)}\""
+    fi
+    ;;
+  "ls "*) echo '[]' ;;
 esac

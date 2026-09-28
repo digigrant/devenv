@@ -2,8 +2,11 @@
 
 Written 2026-09-26 at the end of the first implementation session; updated
 the same day in session 2, which restructured the sbx layer to Docker's
-layout, and on 2026-09-27 when the Infisical secrets manager was built
-(branch `fm/devenv-devenv-infisical-secrets-manager-df`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
+layout, on 2026-09-27 when the Infisical secrets manager was built
+(branch `fm/devenv-devenv-infisical-secrets-manager-df`), and on 2026-09-28
+when sbx became the only record of the Claude placeholder and the secret
+refresh became configurable (branch
+`fm/devenv-design-host-prepare-anthropic-secret-col-14`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
 [HOST-VERIFY.md](HOST-VERIFY.md).
 
 **SPEC.md is current:** session 2 revised it to the design as built, including
@@ -95,6 +98,7 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Keyring unlock (SECRETS.md §6.6) | `host-prepare` reads the keyring password on the TTY | the Secret Service's own pop-up window: a `secret-tool lookup` opens it and host-prepare waits up to 3 minutes; devenv never sees the password. No display: stop with instructions | P1: under WSLg both the new-keyring prompt and the unlock prompt are pop-up windows. The hook's timeout is 5 minutes. |
 | Locked-keyring check (SECRETS.md §6.4) | "if the keyring is locked, fail with one line; never prompt" (mechanism open) | the Secret Service's `SearchItems` over D-Bus (`busctl --user`), per entry: unlocked, locked or missing | Checked against gnome-keyring 50 in a container with `dbus-monitor`: `secret-tool lookup` on a locked keyring calls `Unlock` and `Prompt` (the window); `secret-tool search` calls `GetSecret` on every entry; `SearchItems` alone loads nothing and never prompts. `tests/keyring.sh` keeps checking it. |
 | Firstmate's own registration of devenv | entered by hand in each running instance's `data/projects.md` | seeded automatically: `firstmate/data/projects.md` in this repo, copied into `$FM_HOME/data/` by `provision.sh` step 8 whenever the destination file is absent, same contract as the existing `firstmate/config/` seeding | Without this, a fresh sandbox or a wiped Firstmate home came up with devenv unregistered again, requiring the same manual step every time. |
+| Claude placeholder and secret refresh | a random placeholder kept on the host (`~/.config/devenv/claude-oauth-placeholder`); `set-custom` "create-or-update"; sbx's refresh default | sbx is the only record of the placeholder: host-prepare reads it back with `sbx secret ls --sandbox dev --json`, reuses it, and makes one only when sbx has none; the host file is deleted. `CLAUDE_AUTH=login` removes the secret with `--sandbox dev --host … --env …`. `SECRET_REFRESH` (default `55m`) with per-secret `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`, validated like sbx's `--refresh`. The GitHub secret moved out of `sbxenv.yaml`: host-prepare sets it (`sbx secret set github --sandbox dev --command … --refresh …`) and `sbxenv.yaml` keeps only `bindings.github` | sbx refuses a second placeholder for the same env var in a scope, so a host file that no longer matched sbx broke `sbx env run` (the owner hit it); login mode's `rm` lacked `--sandbox` and removed nothing; the custom secret's default refresh is `on-demand`, not the 55 minutes SECRETS.md S7 intended; `sbxenv.yaml` expands only `${{ env.* }}` references, so it can't take the refresh from `devenv.conf` (the owner chose moving the GitHub secret to host-prepare over a second copy of the setting). Owner's decisions, 2026-09-28. |
 
 ## Verification status
 
@@ -103,7 +107,7 @@ re-run with the new one.
 
 | Item | Status |
 |---|---|
-| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself, including "still signed in after a second `sbx env run`" (the placeholder must stay stable). |
+| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself, including "still signed in after a second `sbx env run`" (the placeholder must stay stable; host-prepare now reuses the one sbx holds, HOST-VERIFY §8.3). |
 | V2 | Plan accepted `agent: devenv`; `extends: claude` resolved (claude template image, inherited credential). Detach/re-attach and herdr-server survival still to check on the host. In the sandbox, a second `devenv entry` re-attached with one `firstmate` workspace (AC3). |
 | V3, V8, V9 | Done in the sandbox (see decisions). |
 | V4 | Changed: skills are linked (see decisions). The sbx simulation checks the links; the host check is HOST-VERIFY V4 and AC7. |
@@ -199,11 +203,24 @@ host-prepare stops with instructions (no such host today).
   with `sbx secret set github --sandbox claude-dev -t …`. When GitHub returns
   401 from `claude-dev`, that's usually the cause.
 - Custom secrets: `sbx secret set-custom --sandbox dev --host … --env …
-  --placeholder … --command …` is create-or-update. Remove one with
-  `sbx secret rm --placeholder <value> -f`. `sbxenv.yaml` can't declare them.
-  Command sources run from a temp directory on the host, so they need
-  absolute paths. The devenv placeholder lives in
-  `~/.config/devenv/claude-oauth-placeholder` on the host.
+  --placeholder … --command …`. A scope holds one custom secret per env var,
+  keyed by its placeholder: the same placeholder updates it, a different one
+  fails with `custom secret env "…" already exists in scope "dev" with
+  placeholder "…"` (checked against sbx 0.45.1 with a throwaway store). That
+  is the error the owner hit when the old host placeholder file and sbx
+  disagreed; since then sbx is the only record and host-prepare reads the
+  placeholder back (`sbx secret ls --sandbox dev --json`). Remove one with
+  `sbx secret rm --sandbox dev --host … --env … -f`; without `--sandbox`, rm
+  looks only at global secrets and still exits 0. `sbxenv.yaml` can't declare
+  them. Command sources run from a temp directory on the host, so they need
+  absolute paths.
+- `--refresh`: a custom secret's default is `on-demand` (resolve on every
+  use), a service secret's is `55m`. It takes `on-demand` or a Go duration;
+  `SECRET_REFRESH*` in `devenv.conf` sets it (validated the same way).
+- `sbxenv.yaml` expands only `${{ env.fileDir }}`, `${{ env.projectDir }}` and
+  `${{ env.args.NAME }}` (from `args:` defaults, `--env-arg` or
+  `--env-args-file`); host environment variables aren't expanded, and argument
+  values aren't passed to lifecycle commands.
 - The shared skills store is mounted only for sbx's built-in agents ("a
   supported agent"; `content/manuals/ai/sandboxes/workflows/agent-skills.md`),
   at `/home/agent/.claude/skills`, never into a workspace. v2 kits can't

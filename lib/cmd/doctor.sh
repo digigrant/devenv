@@ -100,7 +100,12 @@ doctor_host() {
 
   echo "secrets (Infisical, keyring service $(keyring_service))"
   case "$CLAUDE_AUTH" in token|login) ;; *) _fail "CLAUDE_AUTH in devenv.conf must be token or login" ;; esac
-  if p=$(sbxenv_github_command_problem); then _fail "$p"; else _pass "sbxenv.yaml's github command runs devenv secret-get $SECRET_GITHUB"; fi
+  p=$(secret_refresh_problems)
+  if [ -n "$p" ]; then
+    while IFS= read -r t; do _fail "$t"; done <<<"$p"
+  else
+    _pass "refresh: $SECRET_CLAUDE $(secret_refresh claude), $SECRET_GITHUB $(secret_refresh github) (devenv.conf)"
+  fi
   p=$(keyring_tools_missing; have curl || echo "curl is not installed; run: sudo apt-get install -y curl")
   if [ -n "$p" ]; then
     while IFS= read -r t; do _fail "$t"; done <<<"$p"

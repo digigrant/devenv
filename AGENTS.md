@@ -16,7 +16,7 @@ spec: `docs/HANDOFF.md`. Usage: `README.md`. The secrets manager (Infisical):
 
 ## Code that runs on the host
 
-The owner's host runs `sbxenv.yaml` (lifecycle hook, secret commands),
+The owner's host runs `sbxenv.yaml` (lifecycle hook, bindings),
 `kits/devenv/spec.yaml`, and the host commands of `bin/devenv`
 (`host-prepare`, `doctor`, `secrets-init`, `secret-get`:
 `lib/cmd/host-prepare.sh`, `lib/cmd/doctor.sh`, `lib/cmd/secrets-init.sh`,

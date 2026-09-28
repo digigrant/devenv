@@ -141,8 +141,10 @@ mate and every worker run on your Claude subscription through the long-lived
   `dev` (`sbxenv.yaml` can't declare custom secrets) whose command is
   `devenv secret-get CLAUDE_CODE_OAUTH_TOKEN`. Inside the sandbox
   `CLAUDE_CODE_OAUTH_TOKEN` holds only a placeholder; the proxy swaps in the
-  real token on requests to `api.anthropic.com`. The placeholder is random and
-  kept on the host in `~/.config/devenv/claude-oauth-placeholder`.
+  real token on requests to `api.anthropic.com`. The placeholder is random,
+  and sbx is the only place that keeps it: on every `sbx env run`,
+  host-prepare reuses the one sbx already holds for `dev` (so a running
+  sandbox stays signed in) and makes a new one only when sbx has none.
 - Firstmate needs no changes: workers inherit the variable, and `quota-axi`
   reads your subscription's usage windows with it.
 - The token is inference-only by design: claude.ai connectors, Remote Control,
@@ -153,9 +155,9 @@ mate and every worker run on your Claude subscription through the long-lived
   (`SBX_CRED_ANTHROPIC_MODE=apikey`), which outranks the subscription and is
   rejected with HTTP 401.
 
-`CLAUDE_AUTH=login` instead uses no Claude secret: run `/login` once after
-each rebuild (a full-scope login that survives `sbx stop`). Switching modes
-takes a recreate.
+`CLAUDE_AUTH=login` instead uses no Claude secret (host-prepare removes the
+custom secret from `dev`): run `/login` once after each rebuild (a full-scope
+login that survives `sbx stop`). Switching modes takes a recreate.
 
 ## Secrets (Infisical)
 
@@ -169,13 +171,21 @@ No secret sits in a file, on the host or in the sandbox:
   on that project and nothing else. The login (the project ID, the client ID
   and this machine's own client secret) is kept in the host's keyring (the
   Secret Service, e.g. gnome-keyring), never in the repo or a file.
+- `devenv host-prepare` registers both with sbx on every `sbx env run`: the
+  `github` service secret and the Claude custom secret for sandbox `dev`,
+  each as a command, not a value. (`sbxenv.yaml` declares no secrets: it
+  can't read `devenv.conf`. Its `bindings.github` approves the proxy using
+  the github one.)
 - When an agent calls GitHub or Anthropic, sbx needs the real value. It runs
   `devenv secret-get NAME` on the host, which reads the keyring, logs in to
   Infisical for a 5-minute access token, reads the one secret and hands it to
-  sbx. sbx keeps it in memory and asks again every 55 minutes. The sandbox
-  only ever sees placeholders.
+  sbx. sbx keeps it in memory and asks again after the refresh set in
+  `devenv.conf`: `SECRET_REFRESH` (55 minutes by default), or a secret's own
+  `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`. A value is a duration
+  such as `10m` or `1h30m`, or `on-demand` (a fetch, and an Infisical login,
+  on every use). The sandbox only ever sees placeholders.
 - **Replacing a token** is one paste into the secret on the Infisical website.
-  Every machine picks it up within 55 minutes.
+  Every machine picks it up within the refresh (55 minutes by default).
 - **Retiring or losing a machine:** revoke its client secret on the website
   (`sbx-host`, Universal Auth). The other machines keep working.
 
@@ -290,7 +300,7 @@ devenv's.
 | `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets commands against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
-| `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets and the checkout location, creates `dev/`, sets up the Claude sign-in. |
+| `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
 | `devenv secrets-init` | host | Stores this machine's Infisical login (project ID, client ID, client secret) in the keyring, then test-fetches both secrets. Interactive; run it again to replace a value (Enter keeps the others). |
 | `devenv secret-get NAME` | host | Prints one secret from Infisical (`GITHUB_GEJ_MACHINE_PAT` or `CLAUDE_CODE_OAUTH_TOKEN`). sbx runs it; you don't need to. |
 
@@ -360,7 +370,7 @@ the workspace is `~/dev` (`PLAIN_WORKSPACE_DIR`).
 ## Layout
 
 ```
-sbxenv.yaml            sbx layer: kit, workspace, env, secrets, lifecycle
+sbxenv.yaml            sbx layer: kit, workspace, env, bindings, lifecycle
 kits/devenv/           v2 sandbox kit (extends claude; clones devenv; entrypoint devenv-entry)
 dev/                   the sandbox workspace (gitignored; created by host-prepare)
 provision.sh           portable installer: --sbx | --plain
@@ -460,8 +470,8 @@ when herdr is bumped past the version it was tested with.
   tokens instead of the `gej-machine` PAT, SSH for git, and wiring
   Firstmate's typesafe dispatch.
 - A GitHub permission system for agents: rulesets or a bot bypass list, or a
-  GitHub App with short-lived tokens through `secrets.github.command` plus
-  `refresh`.
+  GitHub App with short-lived tokens through host-prepare's `github` secret
+  (a `secret-get`-style command) and a short `SECRET_REFRESH_GITHUB`.
 - Worker effort and model profiles in Firstmate's `config/crew-dispatch.json`.
 - A second worker harness (e.g. Codex): `config/crew-harness` plus its install.
 - Bumping herdr past 0.8.0 once Firstmate verifies newer versions.

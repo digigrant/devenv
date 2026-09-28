@@ -134,9 +134,10 @@ cd ~/devenv && sbx env plan --kit-arg ref=initial-setup
 Paste the whole plan. It should show: sandbox `dev`; agent/kit `devenv` from
 `./kits/devenv` extending `claude`, with kit arguments `ref=initial-setup`
 (and `repo`); workspace `/home/<you>/devenv/dev` (read-write) and **no**
-additional workspaces; env `DEVENV_ENTRY=herdr`; the `github` secret from a
-command (no `anthropic` secret); a `github` binding for `api.github.com` and
-`github.com`; skills `off`; the `devenv host-prepare` lifecycle command.
+additional workspaces; env `DEVENV_ENTRY=herdr`; no secrets (`devenv
+host-prepare` sets the `github` and Claude secrets itself, §9); a `github`
+binding for `api.github.com` and `github.com`; skills `off`; the `devenv
+host-prepare` lifecycle command.
 
 Then:
 
@@ -148,7 +149,8 @@ Save the whole create output. The `devenv host-prepare` part should include
 `✓ Infisical secrets and checkout location look right`,
 `created the workspace /home/<you>/devenv/dev` (first run only) and end with
 `Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
-(placeholder)`. If the keyring is locked (after a WSL restart), a pop-up
+(new placeholder, refresh 55m)` (`reused placeholder` when sbx already holds
+one). If the keyring is locked (after a WSL restart), a pop-up
 window asks for its password first, and host-prepare prints `✓ keyring
 unlocked`. You should land in herdr, in a workspace named **firstmate**,
 with Claude starting in `~/devenv/dev/firstmate`, already signed in.
@@ -496,7 +498,7 @@ Results, from the owner on 2026-09-27 (SECRETS.md §5):
    Expected, first command:
    ```text
    secrets (Infisical, keyring service devenv-infisical)
-     ok    sbxenv.yaml's github command runs devenv secret-get GITHUB_GEJ_MACHINE_PAT
+     ok    refresh: CLAUDE_CODE_OAUTH_TOKEN 55m, GITHUB_GEJ_MACHINE_PAT 55m (devenv.conf)
      ok    keyring entries present (service devenv-infisical: project-id client-id client-secret)
      ok    GITHUB_GEJ_MACHINE_PAT authenticates as gej-machine (HTTP 200; expires …)
      ok    CLAUDE_CODE_OAUTH_TOKEN is a setup-token (sk-ant-oat01-…)
@@ -525,10 +527,11 @@ Results, from the owner on 2026-09-27 (SECRETS.md §5):
    Expected in the `devenv host-prepare` part: the leftover warnings,
    `✓ Infisical secrets and checkout location look right`, and
    `✓ Claude setup-token available to sandbox dev as CLAUDE_CODE_OAUTH_TOKEN
-   (placeholder)`. You land in herdr as before.
+   (… placeholder, refresh 55m)`. You land in herdr as before.
 
-6. **What sbx stored** (SPEC §10 invariant 12, and whether sbx expanded
-   `${{ env.fileDir }}` in the `github` command):
+6. **What sbx stored** (SPEC §10 invariant 12; since §9, `host-prepare`
+   registers the `github` command, so the source is an absolute path without
+   quotes and `${{ env.fileDir }}` no longer applies):
    ```sh
    jq -c '.. | objects | select(.type? == "command") | {source, refresh}' \
      ~/.local/state/sandboxes/sandboxes/sandboxd/runtimes/dev.json
@@ -636,3 +639,115 @@ Expected: `exit=1` for both.
 | A5 | 8.3 step 3, 8.4 | all `ok` with no leftover warnings; FAIL and exit 1 with `DEVENV_KEYRING_SERVICE=devenv-missing` |
 | A6 | 8.4 | `exit=1` for both |
 | A7 | the PR (code review) | no secret or identity detail as an argument in `secret-get`, `secrets-init`, `host-prepare` or `doctor` |
+
+## 9. Secrets set by host-prepare: Claude placeholder, GitHub, refresh
+
+`devenv host-prepare` now gives the sandbox both secrets itself, each with the
+refresh set in `devenv.conf` (`SECRET_REFRESH`, default `55m`; per-secret
+`SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`):
+
+- the `github` service secret (`sbx secret set github --sandbox dev
+  --command … --refresh …`); `sbxenv.yaml` has no `secrets:` block any more
+  and only keeps `bindings.github`;
+- the Claude custom secret, whose placeholder sbx alone keeps: host-prepare
+  reuses the one sbx holds for `dev`. `CLAUDE_AUTH=login` removes the
+  sandbox-scoped secret.
+
+This changes `devenv host-prepare` and `sbxenv.yaml`, which run on the host,
+so the host checkout must be on the branch:
+
+```sh
+git -C ~/devenv fetch origin
+git -C ~/devenv switch fm/devenv-design-host-prepare-anthropic-secret-col-14
+```
+
+Switch back to `main` once the PR is merged. Placeholders aren't secret; the
+commands below still print only their first 14 characters.
+
+1. **Doctor** reads the new settings:
+   ```sh
+   ~/devenv/bin/devenv doctor | grep refresh
+   ```
+   Expected: `ok    refresh: CLAUDE_CODE_OAUTH_TOKEN 55m, GITHUB_GEJ_MACHINE_PAT 55m (devenv.conf)`.
+
+2. **A run that only attaches keeps both working.** With `dev` running
+   (created before this change, from an `sbxenv.yaml` that still declared
+   `secrets.github`):
+   ```sh
+   cd ~/devenv && sbx env run
+   ```
+   Paste the plan: the `github` secret is no longer declared (sbx may mark it
+   `!` to forget). Expected in the `devenv host-prepare` part:
+   `✓ gej-machine token (GITHUB_GEJ_MACHINE_PAT) available to sandbox dev as
+   the github secret (refresh 55m)`, `removed
+   ~/.config/devenv/claude-oauth-placeholder (sbx keeps the placeholder now)`
+   (first run only) and `✓ Claude setup-token available to sandbox dev as
+   CLAUDE_CODE_OAUTH_TOKEN (reused placeholder, refresh 55m)`. Then **(in
+   sandbox)**:
+   ```sh
+   gh api user --jq .login                                  # gej-machine
+   claude -p "reply with the single word ok" < /dev/null    # ok
+   ```
+
+3. **What sbx stored.** The Claude custom secret:
+   ```sh
+   sbx secret ls --sandbox dev --json | jq -c '.custom_secrets[] | {env, placeholder: (.placeholder[0:14] + "…"), refresh, source}'
+   ```
+   Expected: exactly one line, `{"env":"CLAUDE_CODE_OAUTH_TOKEN",
+   "placeholder":"sbx-cs-devenv-…","refresh":"55m","source":"/home/<you>/devenv/bin/devenv
+   secret-get CLAUDE_CODE_OAUTH_TOKEN"}` (before this change it said
+   `on-demand`). `sbx secret ls` doesn't show a service secret's command or
+   refresh; the sandbox's runtime file does:
+   ```sh
+   jq -c '.. | objects | select(.type? == "command") | {source, refresh}' \
+     ~/.local/state/sandboxes/sandboxes/sandboxd/runtimes/dev.json
+   ```
+   Expected: the `github` command,
+   `/home/<you>/devenv/bin/devenv secret-get GITHUB_GEJ_MACHINE_PAT`, with
+   `"refresh":"55m"` (report it if sbx doesn't record the secret there, or
+   still shows the old `"${{ env.fileDir }}…"` source after step 2).
+
+4. **A second attach-only run** changes nothing: `cd ~/devenv && sbx env run`
+   again prints `(reused placeholder, refresh 55m)`, step 3 prints the same
+   placeholder, and `gh api user` and `claude -p` still answer.
+
+5. **Per-secret overrides**, without editing `devenv.conf` (sbx passes its
+   environment to host-prepare):
+   ```sh
+   cd ~/devenv && SECRET_REFRESH_CLAUDE=10m SECRET_REFRESH_GITHUB=30m sbx env run
+   ```
+   Expected: `(refresh 30m)` for the github secret and `(reused placeholder,
+   refresh 10m)` for Claude; step 3 shows `10m` and, if the runtime file
+   records it, `30m`. Then plain `cd ~/devenv && sbx env run` puts both back
+   to `55m`.
+
+6. **An invalid value is refused before anything runs:**
+   ```sh
+   SECRET_REFRESH_GITHUB=5d ~/devenv/bin/devenv host-prepare; echo "exit=$?"
+   ```
+   Expected: `devenv: error: SECRET_REFRESH_GITHUB in devenv.conf must be
+   on-demand or a duration such as 55m or 10m, not '5d'` and `exit=1`.
+
+7. **GitHub through the binding alone, in a new sandbox** (Docker's docs say
+   a binding only approves a stored credential, so `sbxenv.yaml` needs no
+   `secrets:`; this checks it on a live sandbox):
+   ```sh
+   cd ~/devenv && sbx env rm
+   cd ~/devenv && sbx env run
+   ```
+   Expected: the plan lists no secrets and the `github` binding; host-prepare
+   prints the github line and `(new placeholder, refresh 55m)`. Then **(in
+   sandbox)** `gh api user --jq .login` answers `gej-machine`,
+   `git ls-remote https://github.com/digigrant/devenv HEAD` prints a commit,
+   `claude -p "reply with the single word ok" < /dev/null` answers `ok`, and
+   `devenv doctor` passes its accounts checks. If GitHub fails here (401, or
+   `gh` not logged in), report it with `sbx secret ls --sandbox dev` and the
+   daemon log's last lines about github.
+
+8. **Optional, only right before a planned recreate** (it signs the running
+   sandbox out of Claude): `CLAUDE_AUTH=login ~/devenv/bin/devenv
+   host-prepare` prints `removed the Claude setup-token custom secret from
+   sandbox dev (CLAUDE_AUTH=login)`, and the first command of step 3 then
+   prints nothing. Plain `~/devenv/bin/devenv host-prepare` makes a new
+   placeholder (`new placeholder`); recreate `dev` (`sbx env rm`,
+   `sbx env run`) so the sandbox gets it.
