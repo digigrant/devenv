@@ -4,17 +4,19 @@
 #   1. tests/statusline-identity.sh
 #   2. tests/secrets.sh: secret-get, doctor and host-prepare against a fake
 #      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9)
-#   3. shellcheck on every script (installed shellcheck, or the pinned image)
-#   4. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
+#   3. tests/tailscale.sh: tailscale-setup and doctor's Tailscale checks
+#      against fake apt, systemd, Tailscale and Windows (spec §6.14)
+#   4. shellcheck on every script (installed shellcheck, or the pinned image)
+#   5. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions (gh from GitHub's apt
 #      repository), a clean second run, and `devenv check` exiting 0.
-#   5. tests/sbx-sim.sh: the kit's own install and startup snippets in a
+#   6. tests/sbx-sim.sh: the kit's own install and startup snippets in a
 #      container laid out like a Docker Sandbox (the devenv clone, the
 #      root-to-agent handoff, ownership, skill links, GitHub's gh replacing
 #      Ubuntu's, a clean re-run).
-#   6. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
+#   7. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
 #      step against a real gnome-keyring in an ubuntu:26.04 container.
-# --no-containers runs only 1 to 3.
+# --no-containers runs only 1 to 4.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 
@@ -56,6 +58,10 @@ cmd_test() {
   echo "== secrets (fakes)"
   if bash "$DEVENV_ROOT/tests/secrets.sh"; then results+=("PASS secrets")
   else results+=("FAIL secrets"); rc=1; fi
+
+  echo "== tailscale (fakes)"
+  if bash "$DEVENV_ROOT/tests/tailscale.sh"; then results+=("PASS tailscale")
+  else results+=("FAIL tailscale"); rc=1; fi
 
   if [ "$lint" = 1 ]; then
     echo "== shellcheck"

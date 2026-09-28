@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fake apt-get for tests/tailscale.sh: logs its argv to $FAKE_LOG/argv.
+# `install … PKG…` records each package as installed in $FAKE_LOG/dpkg/<pkg>
+# (read by tests/fakes/dpkg-query), at version $FAKE_TS_VERSION.
+#   FAKE_APT_FAIL=update|install  makes that subcommand fail
+set -euo pipefail
+printf 'apt-get %s\n' "$*" >> "$FAKE_LOG/argv"
+sub='' pkgs=()
+for a in "$@"; do
+  case "$a" in
+    -*) ;;
+    *) if [ -z "$sub" ]; then sub=$a; else pkgs+=("$a"); fi ;;
+  esac
+done
+if [ "${FAKE_APT_FAIL:-}" = "$sub" ]; then echo "E: fake apt-get $sub failure" >&2; exit 100; fi
+case "$sub" in
+  update) ;;
+  install)
+    mkdir -p "$FAKE_LOG/dpkg"
+    for p in "${pkgs[@]}"; do printf '%s\n' "${FAKE_TS_VERSION:-1.90.6}" > "$FAKE_LOG/dpkg/$p"; done
+    ;;
+  *) echo "fake apt-get: unexpected call" >&2; exit 2 ;;
+esac

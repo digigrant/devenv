@@ -60,8 +60,10 @@ host                                  sandbox "dev"
    `~/devenv/bin/devenv secrets-init`. The secrets themselves live in
    Infisical; on a machine that has never run devenv, follow
    [A new machine](#a-new-machine) for where to find the three values.
-4. Check the host: `~/devenv/bin/devenv doctor`
-5. Build and enter the sandbox: `cd ~/devenv && sbx env run`
+4. Install Tailscale and sign this machine in (once):
+   `~/devenv/bin/devenv tailscale-setup` (see [Tailscale](#tailscale)).
+5. Check the host: `~/devenv/bin/devenv doctor`
+6. Build and enter the sandbox: `cd ~/devenv && sbx env run`
 
 You land in herdr, in a workspace named `firstmate`, where the first mate
 (Claude at `xhigh` effort) runs in `~/devenv/dev/firstmate`. No `/login` is
@@ -101,6 +103,67 @@ sudo apt install jq curl libsecret-tools gnome-keyring   # busctl comes with sys
 On WSL, Docker supports the Linux `sbx` only "best-effort"
 (docker/sbx-releases#397); `devenv doctor` says so. The owner chose it so WSL
 and native Linux behave the same.
+
+### Tailscale
+
+Every devenv host runs Tailscale in Linux: inside the WSL 2 distro on the
+Windows PC, and natively on a Linux PC. (It is for Magic Conch, a phone app
+that will reach a hub on each machine over the tailnet; the hub isn't part of
+devenv yet.) Once per machine:
+
+```sh
+~/devenv/bin/devenv tailscale-setup
+```
+
+It adds Tailscale's own apt repository for your release as Tailscale
+documents it (the key `/usr/share/keyrings/tailscale-archive-keyring.gpg` and
+the source `/etc/apt/sources.list.d/tailscale.list`, from
+`pkgs.tailscale.com`), installs `tailscale`, starts `tailscaled` and enables it
+at boot. If the machine isn't signed in, it runs `sudo tailscale up`, which
+prints a link: open it in a browser and sign in to your tailnet. That is the
+only sign-in, once per machine. devenv never uses a Tailscale auth key and
+stores nothing from Tailscale (tailscaled keeps the machine's own key, as on
+any machine running Tailscale). Run the command again whenever you like: with
+everything in place it changes nothing and doesn't ask for sudo. Tailscale
+updates arrive with the machine's normal apt upgrades. `devenv doctor` checks
+all of this and prints the fix for anything missing.
+
+**On WSL 2** (Tailscale's page:
+[Install Tailscale on Windows with WSL 2](https://tailscale.com/docs/install/windows/wsl2)):
+
+- **Uninstall Tailscale on Windows** (Settings > Apps > Installed apps >
+  Tailscale > Uninstall), or keep it stopped whenever WSL runs Tailscale:
+  with both running, Tailscale traffic from WSL doesn't work. Tailscale's
+  own advice is to run it on Windows only; devenv runs it in WSL instead, so
+  the Windows PC and a Linux PC work the same way. To keep it installed but
+  stopped, in an administrator PowerShell:
+  `Set-Service Tailscale -StartupType Disabled; Stop-Service Tailscale`.
+  `tailscale-setup` refuses to start, and `doctor` fails, while it runs on
+  Windows.
+- **systemd must be on** in the distro, since tailscaled is a systemd
+  service: `/etc/wsl.conf` needs `systemd=true` under `[boot]` (Ubuntu's WSL
+  image has it), then `wsl.exe --shutdown` in PowerShell and open the distro
+  again. `doctor` prints the exact fix when it's off.
+- WSL can shut an idle distro down (`instanceIdleTimeout` in `.wslconfig`,
+  15 seconds by default), and tailscaled stops with it.
+- The WSL machine may get the Windows machine's name. If the Windows PC was in
+  the tailnet, remove its old entry on the admin console's
+  [Machines](https://console.tailscale.com/admin/machines) page, and rename
+  the WSL one there if you like.
+
+**Once per tailnet, in the admin console** (the Magic Conch hub will use
+`tailscale serve`, which needs both; devenv doesn't configure `serve`): open
+the [DNS](https://console.tailscale.com/admin/dns) page, turn on **MagicDNS**
+if it is off (tailnets created since October 2022 have it on), and under
+**HTTPS Certificates** select **Enable HTTPS**. Enabling HTTPS publishes the
+name of every machine that gets a certificate in the public Certificate
+Transparency logs, so keep machine names free of anything sensitive. `doctor`
+warns while either is off.
+
+**Key expiry.** A machine's Tailscale key expires (after 180 days by default),
+and the machine then drops off the tailnet until it signs in again. `doctor`
+warns `WARN_DAYS` ahead. Renew with `sudo tailscale up --force-reauth`, or
+disable key expiry for the machine on the Machines page.
 
 ## Operating rules
 
@@ -294,15 +357,16 @@ devenv's.
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, the keyring and both Infisical secrets (never prompts), checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links. |
 | `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
 | `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets commands against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets commands against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
 | `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
 | `devenv secrets-init` | host | Stores this machine's Infisical login (project ID, client ID, client secret) in the keyring, then test-fetches both secrets. Interactive; run it again to replace a value (Enter keeps the others). |
 | `devenv secret-get NAME` | host | Prints one secret from Infisical (`GITHUB_GEJ_MACHINE_PAT` or `CLAUDE_CODE_OAUTH_TOKEN`). sbx runs it; you don't need to. |
+| `devenv tailscale-setup` | host | Installs Tailscale from Tailscale's apt repository, starts tailscaled, and signs the machine in with `sudo tailscale up` (a browser sign-in, once per machine; no auth key). On WSL it first checks systemd and that Tailscale isn't running on Windows. Interactive; run it again safely. |
 
 ### Updating versions
 
@@ -386,7 +450,7 @@ firstmate/config/      starting copy of Firstmate's config
 firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
-tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), fixtures
+tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), Tailscale setup tests (fakes), fixtures
 ```
 
 ### herdr's Claude detection rules
@@ -451,6 +515,10 @@ when herdr is bumped past the version it was tested with.
   in sbx's daemon log (see docs/HOST-VERIFY.md, step 5). A `--kit-arg ref=`
   that names no branch on GitHub is one cause. Clean up with `sbx env rm`
   before retrying.
+- **Tailscale on the host.** Run `~/devenv/bin/devenv doctor`: each failing
+  line in its Tailscale part says how to fix it. On WSL, Tailscale traffic
+  that doesn't work at all usually means Tailscale also runs on Windows
+  ([Tailscale](#tailscale)).
 - **`gh` is Ubuntu's older release** (`gh --version` says `Ubuntu`, and
   `gh api --slurp` is an unknown flag). Either the sandbox was created before
   devenv installed `gh` from GitHub, or `provision.sh` warned at create that
