@@ -285,10 +285,14 @@ devenv: provisioning from /home/agent/fm-projects/devenv at <commit> <subject>
 ```sh
 git -C "$DEVENV_DIR" status -sb | head -n 1; git -C "$DEVENV_DIR" log --oneline -1
 devenv check | grep 'devenv runs from'
+gh --version | head -n 1; apt-cache policy gh | head -n 6
 ```
 
 Expected: `## initial-setup...origin/initial-setup`, the branch's head commit,
 and `devenv runs from /home/agent/fm-projects/devenv, on initial-setup at …`.
+`gh` is GitHub's current release (no `Ubuntu` in its version line): apt's
+`Installed` and `Candidate` match, and the `***` version comes from
+`https://cli.github.com/packages`.
 
 ### V10: settings survive a restart
 
@@ -313,7 +317,7 @@ recreate in V6.
 
 ```sh
 for h in github.com api.github.com codeload.github.com objects.githubusercontent.com \
-         release-assets.githubusercontent.com raw.githubusercontent.com registry.npmjs.org nodejs.org herdr.dev; do
+         release-assets.githubusercontent.com raw.githubusercontent.com cli.github.com registry.npmjs.org nodejs.org herdr.dev; do
   printf '%-40s ' "$h"; sbx policy check network --sandbox dev "$h" 2>&1 | tail -n 1
 done
 sbx policy log | tail -n 40

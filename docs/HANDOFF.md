@@ -99,6 +99,7 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Locked-keyring check (SECRETS.md §6.4) | "if the keyring is locked, fail with one line; never prompt" (mechanism open) | the Secret Service's `SearchItems` over D-Bus (`busctl --user`), per entry: unlocked, locked or missing | Checked against gnome-keyring 50 in a container with `dbus-monitor`: `secret-tool lookup` on a locked keyring calls `Unlock` and `Prompt` (the window); `secret-tool search` calls `GetSecret` on every entry; `SearchItems` alone loads nothing and never prompts. `tests/keyring.sh` keeps checking it. |
 | Firstmate's own registration of devenv | entered by hand in each running instance's `data/projects.md` | seeded automatically: `firstmate/data/projects.md` in this repo, copied into `$FM_HOME/data/` by `provision.sh` step 8 whenever the destination file is absent, same contract as the existing `firstmate/config/` seeding | Without this, a fresh sandbox or a wiped Firstmate home came up with devenv unregistered again, requiring the same manual step every time. |
 | Claude placeholder and secret refresh | a random placeholder kept on the host (`~/.config/devenv/claude-oauth-placeholder`); `set-custom` "create-or-update"; sbx's refresh default | sbx is the only record of the placeholder: host-prepare reads it back with `sbx secret ls --sandbox dev --json`, reuses it, and makes one only when sbx has none; the host file is deleted. `CLAUDE_AUTH=login` removes the secret with `--sandbox dev --host … --env …`. `SECRET_REFRESH` (default `55m`) with per-secret `SECRET_REFRESH_CLAUDE` / `SECRET_REFRESH_GITHUB`, validated like sbx's `--refresh`. The GitHub secret moved out of `sbxenv.yaml`: host-prepare sets it (`sbx secret set github --sandbox dev --command … --refresh …`) and `sbxenv.yaml` keeps only `bindings.github` | sbx refuses a second placeholder for the same env var in a scope, so a host file that no longer matched sbx broke `sbx env run` (the owner hit it); login mode's `rm` lacked `--sandbox` and removed nothing; the custom secret's default refresh is `on-demand`, not the 55 minutes SECRETS.md S7 intended; `sbxenv.yaml` expands only `${{ env.* }}` references, so it can't take the refresh from `devenv.conf` (the owner chose moving the GitHub secret to host-prepare over a second copy of the setting). Owner's decisions, 2026-09-28. |
+| GitHub CLI (§6.3 step 1) | Ubuntu's `gh` from apt in plain mode; the sandbox image's own (Ubuntu's 2.46) in sbx mode | GitHub's current release from GitHub's own apt repository (`cli.github.com`), set up as GitHub documents (keyring in `/etc/apt/keyrings`, a `signed-by` source), in both modes and unpinned; it replaces the image's Ubuntu `gh` at every create | Ubuntu's 2.46 rejects `gh api --slurp` ("unknown flag"), which Firstmate's PR comment and review monitor uses, so the monitor failed on every PR. Owner's decision, 2026-09-28. |
 
 ## Verification status
 
@@ -325,7 +326,10 @@ host-prepare stops with instructions (no such host today).
   (about a minute). Neither touches a real keyring, Infisical or sbx.
 - To exercise sbx-mode provisioning in `claude-dev` without touching live
   files, point `HOME`, `WORKSPACE_DIR`, `DEVENV_ENV_FILE`,
-  `DEVENV_SYSTEM_PREFIX` and `NPM_CONFIG_PREFIX` at scratch paths.
+  `DEVENV_SYSTEM_PREFIX` and `NPM_CONFIG_PREFIX` at scratch paths. Step 1
+  still uses the live apt: it installs missing packages, and it replaces a
+  `gh` that isn't GitHub's current release from `cli.github.com`. Test apt
+  changes in a container (`tests/sbx-sim.sh`) instead.
 - To exercise host commands, use a scratch `HOME` with a copy of the checkout
   at `$HOME/devenv`, a fake `sbx` on `PATH` that logs its arguments, and
   `env -u IS_SANDBOX -u SANDBOX_NAME -u WORKSPACE_DIR` (otherwise they detect

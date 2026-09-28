@@ -317,8 +317,10 @@ devenv bump --repo ~/devenv-bump --list
 devenv bump --repo ~/devenv-bump herdr 0.9.1   # warns loudly: Firstmate has not verified 0.9.1
 ```
 
-Claude Code and Firstmate are not pinned: Claude Code updates itself, and
-Firstmate updates automatically (next section).
+Claude Code, Firstmate and `gh` are not pinned: Claude Code updates itself,
+Firstmate updates automatically (next section), and `provision.sh` installs
+GitHub's current `gh` release from GitHub's own apt repository
+(`cli.github.com`), so every sandbox create gets the latest one.
 
 ## Firstmate updates
 
@@ -355,10 +357,11 @@ On any Debian/Ubuntu machine:
 
 ```sh
 git clone https://github.com/digigrant/devenv ~/devenv
-~/devenv/provision.sh --plain            # add --yes to skip the apt prompt
+~/devenv/provision.sh --plain            # add --yes to skip the apt prompts
 ```
 
-It installs the same pinned tools into `~/.local`, installs Node
+It installs the same pinned tools into `~/.local`, installs `gh` from
+GitHub's apt repository (adding its keyring and source), installs Node
 `NODE_VERSION` if node is missing or older than `NODE_MIN_VERSION`, installs
 Claude Code with its official installer if missing (the one documented
 exception to checksum pinning), clones Firstmate to `~/dev/firstmate`, links
@@ -448,6 +451,11 @@ when herdr is bumped past the version it was tested with.
   in sbx's daemon log (see docs/HOST-VERIFY.md, step 5). A `--kit-arg ref=`
   that names no branch on GitHub is one cause. Clean up with `sbx env rm`
   before retrying.
+- **`gh` is Ubuntu's older release** (`gh --version` says `Ubuntu`, and
+  `gh api --slurp` is an unknown flag). Either the sandbox was created before
+  devenv installed `gh` from GitHub, or `provision.sh` warned at create that
+  it couldn't install it from `cli.github.com` (the create output or sbx's
+  daemon log says why). Fix the cause, then rebuild the sandbox.
 - **A download is blocked (HTTP 403).** Add only that host to
   `permissions.network.allow` in `kits/devenv/spec.yaml` (by PR), then
   recreate. Never `herdr.dev`.

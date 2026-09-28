@@ -6,11 +6,12 @@
 #      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9)
 #   3. shellcheck on every script (installed shellcheck, or the pinned image)
 #   4. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
-#      --plain in a throwaway container, versions, a clean second run, and
-#      `devenv check` exiting 0.
+#      --plain in a throwaway container, versions (gh from GitHub's apt
+#      repository), a clean second run, and `devenv check` exiting 0.
 #   5. tests/sbx-sim.sh: the kit's own install and startup snippets in a
 #      container laid out like a Docker Sandbox (the devenv clone, the
-#      root-to-agent handoff, ownership, skill links, a clean re-run).
+#      root-to-agent handoff, ownership, skill links, GitHub's gh replacing
+#      Ubuntu's, a clean re-run).
 #   6. tests/keyring.sh: secrets-init, secret-get and host-prepare's unlock
 #      step against a real gnome-keyring in an ubuntu:26.04 container.
 # --no-containers runs only 1 to 3.

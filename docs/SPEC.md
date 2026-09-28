@@ -62,7 +62,7 @@ The sandbox devenv replaces; it runs alongside `dev` until Phase 5, and devenv's
 - **Workspace mode is "direct".** The host folder `/home/gejoy/dev` (in WSL) is mounted over virtiofs at the **same path**, read-write. `WORKSPACE_DIR=/home/gejoy/dev`.
 - **The host's home folder differs per machine.** WSL uses `/home/gejoy`; the other Linux machine uses `/home/grant`. **Never hardcode a home path.**
 - Preinstalled tools (the claude template image; the same in `dev`):
-  - git 2.53, gh 2.46, Node v22.22.1, npm 9.2.0, python 3.14, uv 0.9.26, jq 1.8.1, curl, Docker 29.8.1 (an in-sandbox engine);
+  - git 2.53, gh 2.46 (Ubuntu's package; provisioning replaces it with GitHub's current release, §6.3), Node v22.22.1, npm 9.2.0, python 3.14, uv 0.9.26, jq 1.8.1, curl, Docker 29.8.1 (an in-sandbox engine);
   - Claude Code (native build in `~/.local/bin`), which auto-updates.
   - The npm global prefix is `/usr/local/share/npm-global` (its `bin` is on PATH).
 - Environment and plumbing:
@@ -358,12 +358,12 @@ Shell-sourceable `KEY=value` lines, one tool per block. Architecture-specific ch
 - `NODE_MIN_VERSION` (22.19.0), `NODE_VERSION` + `NODE_SHA256_*` (plain mode installs it only if node is missing or older);
 - `TEST_SHELLCHECK_IMAGE` (pinned by digest).
 
-Every download must be verified against its sha256 before installing. **No `curl | sh`.** The single documented exception is installing Claude Code in plain mode when it's missing (§6.3), because it updates itself anyway.
+Every download must be verified against its sha256 before installing. **No `curl | sh`.** The single documented exception is installing Claude Code in plain mode when it's missing (§6.3), because it updates itself anyway. apt packages aren't pinned: apt verifies them against their repository's key, and `gh`'s key is GitHub's keyring, fetched over HTTPS from `cli.github.com` as GitHub documents (§6.3 step 1).
 
 ### 6.3 `provision.sh [--sbx|--plain] [--yes] [--git-identity bot|skip] [--skip-claude-install]`
 The mode is auto-detected when no flag is given: `--sbx` if `IS_SANDBOX=1` or `SANDBOX_NAME` is set, otherwise `--plain`. The git identity defaults to `bot` in sbx mode and `skip` in plain mode. Every step is idempotent: a second run changes nothing and exits 0. devenv runs from the checkout that holds `provision.sh` (in sbx mode, the sandbox's clone).
 
-1. **System packages.** Install via apt what's missing: `git curl jq ca-certificates tar python3` (and `gh` in plain mode). **Never install tmux.** Use sudo only when needed.
+1. **System packages.** Install via apt what's missing: `git curl jq ca-certificates tar python3`. **Never install tmux.** Use sudo only when needed. Then, in both modes, install `gh` from GitHub's own apt repository, set up as GitHub documents for Debian/Ubuntu: the keyring `https://cli.github.com/packages/githubcli-archive-keyring.gpg` at `/etc/apt/keyrings/githubcli-archive-keyring.gpg` and the source `/etc/apt/sources.list.d/github-cli.list` (`deb [arch=… signed-by=<that keyring>] https://cli.github.com/packages stable main`). When the keyring or source differs, or the installed `gh` isn't apt's candidate from that repository, confirm (unless `--yes`), write them, `apt-get update` and `apt-get install gh`. This installs GitHub's current release, and in sbx mode replaces the image's older Ubuntu `gh` (2.46, which lacks `gh api --slurp`). `gh` isn't pinned. A failed download or apt run warns and leaves `gh` as it is.
 2. **Node.** Require node ≥ `NODE_MIN_VERSION`. In plain mode, install the pinned Node tarball if node is missing or older. In sbx mode it's preinstalled; just check it.
 3. **Pinned binaries.** Put `herdr`, `treehouse` and `no-mistakes` in `~/.local/bin`. Pick the asset for the architecture, download from GitHub Releases, verify the sha256, and install atomically. Skip any tool whose `--version` already matches.
 4. **npm globals.** Install the pinned versions globally into the existing npm global prefix (plain mode: a user prefix under `~/.local` if that isn't writable). **Do not install a browser.** (The tools' `setup hooks` commands run in step 10.)
@@ -575,7 +575,7 @@ It detects where it's running and exits 1 when any check fails.
 1. No secret values in the repo, in logs, or in files the sandbox can write. Inside the sandbox, only proxy placeholders exist.
 2. The host's devenv checkout is never inside a folder a sandbox can write to, and the only sandbox-writable folder inside it is `dev/` (`doctor` and `host-prepare` enforce this).
 3. Code that runs on the host (lifecycle hooks, secret `command:`s, `bin/devenv` host subcommands, the kit) comes only from the owner's host checkout, and never reads or runs anything from `dev/`.
-4. Every download is pinned and checksum-verified. No `curl | sh`, except the Claude Code install in plain mode (§6.2).
+4. Every download is pinned and checksum-verified. No `curl | sh`, except the Claude Code install in plain mode (§6.2). apt packages, including `gh` from GitHub's repository, are verified by apt against their repository's key instead (§6.2).
 5. No allowance for `herdr.dev`; herdr's automatic checks are off.
 6. No completion scripts in `/etc/sandbox-persistent.sh`.
 7. Firstmate's `yolo` stays off. Merges need the owner's explicit word (Firstmate rule 2).

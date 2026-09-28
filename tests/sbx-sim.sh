@@ -6,7 +6,8 @@
 # /etc/sandbox-persistent.sh and npm prefix, node from apt. The kit clones
 # devenv from a local git copy of this working tree (standing in for GitHub),
 # so it tests the code on disk. It checks the clone, the root-to-agent handoff
-# in provision.sh, file ownership, skill links, and a clean re-run.
+# in provision.sh, file ownership, skill links, gh from GitHub's apt
+# repository replacing the image's Ubuntu gh, and a clean re-run.
 #   tests/sbx-sim.sh [image]
 set -euo pipefail
 
