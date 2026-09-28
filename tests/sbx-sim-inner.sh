@@ -22,6 +22,10 @@ if [ -n "${PROXY_CA_CERT_B64:-}" ]; then
   export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 fi
 apt-get install -y -qq --no-install-recommends sudo git curl jq python3 nodejs npm ca-certificates bsdutils >/dev/null
+# The sandbox image ships Ubuntu's gh; provision.sh replaces it with GitHub's.
+apt-get install -y -qq --no-install-recommends gh >/dev/null
+ubuntu_gh=$(dpkg-query -W -f='${Version}' gh)
+echo "Ubuntu's gh: $ubuntu_gh"
 if getent passwd 1000 >/dev/null; then userdel -r "$(id -nu 1000)" >/dev/null 2>&1 || true; fi
 useradd -m -u 1000 -s /bin/bash agent
 echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent
@@ -49,9 +53,11 @@ chmod 0644 /tmp/kit-install.sh /tmp/kit-startup.sh
 
 snapshot() {
   { find /home/agent \( -path /home/agent/.cache -o -path /home/agent/.npm \) -prune -o \( -type f -o -type l \) -print
-    echo /etc/sandbox-persistent.sh; echo /usr/local/bin/devenv-entry; } | sort | while read -r f; do
+    echo /etc/sandbox-persistent.sh; echo /usr/local/bin/devenv-entry
+    echo /etc/apt/keyrings/githubcli-archive-keyring.gpg; echo /etc/apt/sources.list.d/github-cli.list; } | sort | while read -r f; do
     if [ -L "$f" ]; then echo "L $(readlink "$f") $f"; else echo "$(sha256sum "$f" | cut -c1-16) $(stat -c %U:%a "$f") $f"; fi
   done
+  dpkg-query -W -f='gh ${Version}\n' gh
 }
 
 echo "== setup.install (as root, like sbx create)"
@@ -76,6 +82,13 @@ as_agent() { sudo -u agent -H --preserve-env=IS_SANDBOX,SANDBOX_NAME,WORKSPACE_D
 for sk in grill-me grilling; do
   [ "$(readlink "/home/agent/.claude/skills/$sk")" = "$CLONE/skills/$sk" ] && pass "skill $sk linked from the clone" || bad "skill $sk not linked"
 done
+gh_v=$(dpkg-query -W -f='${Version}' gh)
+LC_ALL=C apt-cache madison gh | awk -F'|' -v v="$gh_v" '{ gsub(/ /, "", $2) } $2 == v && $3 ~ /^ *https:\/\/cli\.github\.com\/packages / { f = 1 } END { exit !f }' \
+  && [ "$gh_v" != "$ubuntu_gh" ] && pass "gh $gh_v from cli.github.com replaced Ubuntu's $ubuntu_gh" || bad "gh is $gh_v, not GitHub's release (Ubuntu's was $ubuntu_gh)"
+grep -q "gh $gh_v installed from GitHub's apt repository (was $ubuntu_gh)" /tmp/install1.log && pass "provision.sh reported the upgrade" || bad "provision.sh did not report the gh upgrade"
+[ "$(as_agent 'gh --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)" = "$gh_v" ] && pass "gh on the agent's PATH is $gh_v" || bad "gh on the agent's PATH"
+as_agent 'gh api --help' | grep -q -- '--slurp' && ! as_agent 'gh api --slurp --paginate 2>&1' | grep -q 'unknown flag' \
+  && pass "gh api --slurp accepted" || bad "gh api --slurp rejected"
 n=$(as_agent "jq '[.hooks.SessionStart[].hooks[].command] | length' ~/.claude/settings.json")
 [ "$n" = 4 ] && pass "4 SessionStart hooks" || bad "SessionStart hooks: $n"
 
@@ -93,6 +106,7 @@ if sh /tmp/kit-install.sh > /tmp/install2.log 2>&1; then pass "second install"; 
 grep -q "devenv: using the existing clone in $CLONE" /tmp/install2.log && pass "second install kept the clone" || bad "second install did not reuse the clone"
 snapshot > /tmp/snap2
 diff -u /tmp/snap1 /tmp/snap2 && pass "second install changed nothing" || bad "second install changed files (diff above)"
+grep -q "gh $gh_v from GitHub's apt repository (already installed)" /tmp/install2.log && pass "second install kept gh $gh_v" || bad "second install did not report gh as already installed"
 
 echo
 if [ "$fail" = 0 ]; then echo "sbx simulation: PASS"; else echo "sbx simulation: FAIL"; fi

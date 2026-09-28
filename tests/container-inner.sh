@@ -33,12 +33,19 @@ snapshot() {
     | sort | while read -r f; do if [ -L "$f" ]; then echo "L $(readlink "$f") $f"; else echo "$(sha256sum "$f" | cut -c1-16) $f"; fi; done'
 }
 
+# GitHub CLI's apt source, keyring and package, outside $HOME.
+gh_state() {
+  sha256sum /etc/apt/keyrings/githubcli-archive-keyring.gpg /etc/apt/sources.list.d/github-cli.list 2>&1
+  dpkg-query -W -f='gh ${Version}\n' gh 2>&1
+}
+
 provision='bash /devenv/provision.sh --plain --yes --git-identity skip --skip-claude-install'
 
 echo "== first run"
 if as_tester "$provision" > /tmp/run1.log 2>&1; then pass "provision.sh (first run)"
 else bad "provision.sh (first run)"; tail -n 40 /tmp/run1.log; exit 1; fi
 snapshot > /tmp/snap1
+gh_state > /tmp/gh1
 
 echo "== second run"
 if as_tester "$provision" > /tmp/run2.log 2>&1; then pass "provision.sh (second run)"
@@ -46,6 +53,10 @@ else bad "provision.sh (second run)"; tail -n 40 /tmp/run2.log; fi
 snapshot > /tmp/snap2
 if diff -u /tmp/snap1 /tmp/snap2; then pass "second run changed nothing in \$HOME"
 else bad "second run changed files in \$HOME (diff above)"; fi
+gh_state > /tmp/gh2
+if diff -u /tmp/gh1 /tmp/gh2; then pass "second run left gh's apt source, keyring and package as they were"
+else bad "second run changed gh's apt source, keyring or package (diff above)"; fi
+grep -q "gh .* from GitHub's apt repository (already installed)" /tmp/run2.log && pass "second run kept gh" || bad "second run did not report gh as already installed"
 if grep -E 'installed|cloned|changed\)' /tmp/run2.log | grep -v 'already installed' | grep -v 'set to'; then
   bad "second run reported changes (lines above)"
 else
@@ -74,6 +85,20 @@ node_v=$(as_tester "$env_sh; node --version" | tr -d v)
 for t in gh-axi chrome-devtools-axi tasks-axi quota-axi; do
   as_tester "$env_sh; command -v $t" >/dev/null && pass "$t on PATH" || bad "$t not on PATH"
 done
+
+# gh: GitHub's release, from one signed-by source.
+gh_v=$(dpkg-query -W -f='${Version}' gh 2>/dev/null || true)
+LC_ALL=C apt-cache madison gh | awk -F'|' -v v="$gh_v" '{ gsub(/ /, "", $2) } $2 == v && $3 ~ /^ *https:\/\/cli\.github\.com\/packages / { f = 1 } END { exit !f }' \
+  && pass "gh $gh_v comes from cli.github.com" || bad "gh ${gh_v:-missing} is not from cli.github.com"
+check_version gh 'gh --version' "$gh_v"
+as_tester 'gh api --help' | grep -q -- '--slurp' && ! as_tester 'gh api --slurp --paginate 2>&1' | grep -q 'unknown flag' \
+  && pass "gh api --slurp accepted" || bad "gh api --slurp rejected"
+n=$( { grep -rlF cli.github.com/packages /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true; } | wc -l)
+[ "$n" = 1 ] && [ "$(grep -c . /etc/apt/sources.list.d/github-cli.list)" = 1 ] \
+  && grep -qF 'signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' /etc/apt/sources.list.d/github-cli.list \
+  && pass "one signed-by source for cli.github.com" || bad "cli.github.com sources: $n files"
+[ "$(find /etc/apt/keyrings -name 'githubcli*' | wc -l)" = 1 ] && [ "$(stat -c %a /etc/apt/keyrings/githubcli-archive-keyring.gpg)" = 644 ] \
+  && pass "one GitHub CLI keyring, readable" || bad "GitHub CLI keyring"
 
 if dpkg -s tmux >/dev/null 2>&1 || as_tester "command -v tmux" >/dev/null; then bad "tmux is installed"; else pass "tmux not installed"; fi
 as_tester 'grep -qx "version_check = false" ~/.config/herdr/config.toml && grep -qx "manifest_check = false" ~/.config/herdr/config.toml && grep -qx "onboarding = false" ~/.config/herdr/config.toml' \

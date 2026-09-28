@@ -54,10 +54,9 @@ SYSTEM_PREFIX=${DEVENV_SYSTEM_PREFIX:-/usr/local}
 
 # ------------------------------------------------------------------ steps
 
-# 1. System packages. Never tmux.
+# 1. System packages. Never tmux. gh comes from GitHub's repository (step_gh).
 step_packages() {
   local p missing=() pkgs=(git curl jq ca-certificates tar python3)
-  [ "$MODE" = plain ] && pkgs+=(gh)
   if ! have dpkg-query; then
     for p in git curl jq tar; do have "$p" || die "$p is missing and this is not a Debian/Ubuntu system"; done
     return 0
@@ -74,6 +73,76 @@ step_packages() {
   as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null
   as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}" >/dev/null
   ok "installed ${missing[*]}"
+}
+
+# 1b. GitHub CLI from GitHub's own apt repository, set up the way GitHub
+# documents for Debian/Ubuntu: its keyring in /etc/apt/keyrings and a
+# signed-by source. Both modes: the sandbox image ships Ubuntu's older gh,
+# which this replaces. Not pinned: a run with something to change installs
+# GitHub's current release, and apt verifies it against GitHub's key. A failed
+# download or apt run warns and keeps going, like a failed Firstmate clone, so
+# it never fails a create.
+GH_APT_URL=https://cli.github.com/packages
+GH_APT_KEYRING=/etc/apt/keyrings/githubcli-archive-keyring.gpg
+GH_APT_LIST=/etc/apt/sources.list.d/github-cli.list
+
+# Installed version of the gh package, or empty.
+gh_pkg_version() {
+  dpkg-query -W -f='${Status}\t${Version}\n' gh 2>/dev/null | awk -F'\t' '$1 == "install ok installed" { print $2 }' || true
+}
+
+# gh_is_githubs VERSION: true when VERSION is apt's candidate for gh and
+# GitHub's repository provides it.
+gh_is_githubs() {
+  local v=$1 cand
+  [ -n "$v" ] || return 1
+  cand=$(LC_ALL=C apt-cache policy gh 2>/dev/null | awk '$1 == "Candidate:" { print $2 }')
+  [ "$v" = "$cand" ] || return 1
+  LC_ALL=C apt-cache madison gh 2>/dev/null | awk -F'|' -v v="$v" -v u="$GH_APT_URL " '
+    { gsub(/^ +| +$/, "", $2); sub(/^ +/, "", $3) }
+    $2 == v && index($3, u) == 1 { f = 1 }
+    END { exit !f }'
+}
+
+step_gh() {
+  local tmp line v new r_key r_list a
+  if ! have dpkg-query; then log "not a Debian/Ubuntu system; install gh yourself"; return 0; fi
+  line="deb [arch=$(dpkg --print-architecture) signed-by=$GH_APT_KEYRING] $GH_APT_URL stable main"
+  tmp=$(mktemp)
+  if ! curl -fsSL --retry 3 --connect-timeout 20 -o "$tmp" "$GH_APT_URL/githubcli-archive-keyring.gpg"; then
+    rm -f "$tmp"
+    warn "could not download the GitHub CLI keyring from $GH_APT_URL; gh left as it is. Fix it, then re-run: $DEVENV_ROOT/provision.sh"
+    return 0
+  fi
+  v=$(gh_pkg_version)
+  if cmp -s "$tmp" "$GH_APT_KEYRING" && [ "$(cat "$GH_APT_LIST" 2>/dev/null)" = "$line" ] && gh_is_githubs "$v"; then
+    rm -f "$tmp"
+    ok "gh $v from GitHub's apt repository (already installed)"
+    return 0
+  fi
+  if [ "$YES" != 1 ] && [ -t 0 ]; then
+    read -r -p "Install gh from GitHub's apt repository ($GH_APT_URL)${v:+, replacing gh $v}? [y/N] " a
+    case "$a" in y|Y|yes) ;; *) rm -f "$tmp"; die "cancelled" ;; esac
+  fi
+  [ -d "${GH_APT_KEYRING%/*}" ] || as_root install -d -m 0755 "${GH_APT_KEYRING%/*}"
+  r_key=$(write_if_changed "$GH_APT_KEYRING" 0644 < "$tmp")
+  rm -f "$tmp"
+  r_list=$(printf '%s\n' "$line" | write_if_changed "$GH_APT_LIST" 0644)
+  ok "GitHub CLI apt source $GH_APT_LIST ($r_list), keyring $GH_APT_KEYRING ($r_key)"
+  log "apt-get install gh (GitHub's release)"
+  if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null; then
+    warn "apt-get update failed; gh left as it is. Fix it, then re-run: $DEVENV_ROOT/provision.sh"
+    return 0
+  fi
+  if gh_is_githubs "$v"; then ok "gh $v from GitHub's apt repository (already installed)"; return 0; fi
+  if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gh >/dev/null; then
+    warn "could not install gh from GitHub's apt repository; gh left as it is. Fix it, then re-run: $DEVENV_ROOT/provision.sh"
+    return 0
+  fi
+  hash -r
+  new=$(gh_pkg_version)
+  if gh_is_githubs "$new"; then ok "gh $new installed from GitHub's apt repository${v:+ (was $v)}"
+  else warn "gh ${new:-missing} is not GitHub's current release; see: apt-cache policy gh"; fi
 }
 
 # 2. Node >= NODE_MIN_VERSION.
@@ -240,6 +309,7 @@ summary() {
   for t in "${DEVENV_BINARIES[@]}"; do printf '  %-22s %s\n' "$t" "$(bin_installed_version "$t")"; done
   for t in "${DEVENV_NPM_PACKAGES[@]}"; do printf '  %-22s %s\n' "$t" "$(npm_installed_version "$t")"; done
   printf '  %-22s %s\n' node "$(node_installed_version)"
+  if have gh; then printf '  %-22s %s\n' gh "$(gh --version 2>/dev/null | extract_version)"; fi
   if have claude; then printf '  %-22s %s\n' claude "$(claude --version 2>/dev/null | extract_version)"; fi
 }
 
@@ -252,6 +322,7 @@ if [ "$MODE" = sbx ] && [ "$(id -u)" -eq 0 ] && [ "$PHASE" != user ]; then
   home=$(getent passwd "$user" | cut -d: -f6)
   HOME=$home resolve_paths sbx
   step_packages
+  step_gh
   HOME=$home step_env_block
   step_entry_shim
   preserve=$(IFS=,; echo "${DEVENV_PASSTHROUGH_ENV[*]}")
@@ -264,6 +335,7 @@ resolve_paths "$MODE"
 export PATH="$LOCAL_BIN:$PATH"
 if [ "$PHASE" != user ]; then
   step_packages
+  step_gh
 fi
 step_node
 step_binaries
