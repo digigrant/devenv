@@ -93,6 +93,10 @@ check_tool_versions() {
     pin=$ANDROID_PLATFORM_TOOLS_VERSION cur=$(adb_installed_version)
     if [ -z "$cur" ]; then _check_warn "adb not installed (pinned $pin) — run provision.sh"
     elif [ "$cur" != "$pin" ]; then _check_warn "adb $cur installed, pinned $pin — run provision.sh"; fi
+    while read -r t pin cur; do
+      if [ -z "$cur" ]; then _check_warn "$t not installed (pinned $pin) — run provision.sh"
+      elif [ "$cur" != "$pin" ]; then _check_warn "$t $cur installed, pinned $pin — run provision.sh"; fi
+    done < <(android_toolchain_versions)
   fi
 }
 

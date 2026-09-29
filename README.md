@@ -342,7 +342,7 @@ Edit it and run `sbx env run` again; no recreate is needed.
 | Claude memory | `~/devenv/dev/.devenv-state/claude-memory/<project>/`, linked from `~/.claude/projects/<project>/memory` | yes |
 | Firstmate project clones | `~/fm-projects` (sandbox disk) | no: push your work |
 | treehouse worktrees | `~/.treehouse` (sandbox disk) | no |
-| adb (platform-tools) | `~/.local/share/android-sdk` (sandbox disk) | no: installed again at the next create |
+| adb (platform-tools) and the Android build toolchain (SDK packages, JDK) | `~/.local/share/android-sdk`, `~/.local/share/jdk` (sandbox disk) | no: installed again at the next create (packages added with `sdkmanager` too: add them again) |
 | Android emulator image and SDK volume | the host's Docker Engine | yes (host; `devenv emulator clean` removes them) |
 | herdr sessions, Claude transcripts | sandbox | no |
 
@@ -367,6 +367,49 @@ session sees them: the first mate, and workers in `~/.treehouse` worktrees.
 sbx's shared skills store is off for this sandbox (`sandboxOptions.skills`):
 sbx mounts it only for its built-in agents, not for a custom kit like
 devenv's.
+
+## Building Android apps
+
+Every sandbox (and plain mode, on x86_64) has what a phone app's Gradle build
+needs, so a project doesn't carry a toolchain of its own:
+
+| What | Pinned | Where |
+|---|---|---|
+| JDK (Eclipse Temurin) | 21.0.12.1+1, the LTS Robolectric runs on | `~/.local/share/jdk` = `JAVA_HOME`; its `java` comes first on `PATH` |
+| Android SDK (the packages below) | | `~/.local/share/android-sdk` = `ANDROID_HOME` |
+| command-line tools | 22.0 (`sdkmanager`, `avdmanager` linked into `~/.local/bin`) | `cmdline-tools/latest` |
+| platform | `platforms;android-37.0` (compileSdk 37) | `platforms/android-37.0` |
+| build-tools | 36.0.0, the default of the Android Gradle Plugin 9.4 | `build-tools/36.0.0` |
+| platform-tools | 37.0.1 (`adb`, linked into `~/.local/bin`) | `platform-tools` |
+
+Gradle itself comes from each project's wrapper (`./gradlew`), which keeps
+one copy per version in `~/.gradle`, shared by every worktree. So from a
+project's `android/` folder:
+
+```sh
+./gradlew assembleDebug testDebugUnitTest
+devenv emulator run -- ./gradlew connectedDebugAndroidTest   # on the host's emulator, below
+```
+
+All of it comes from `versions.env`, checked by sha256, and takes about 1 GB of
+the sandbox's disk; `devenv doctor` and `devenv check` report anything missing
+or at another version. The JDK uses the system's CA list for Java when there is
+one, as Ubuntu's own JDKs do, because the sandbox's proxy re-signs
+`github.com`, where the Gradle wrapper downloads Gradle.
+
+**Other SDK packages.** devenv doesn't accept the
+[Android SDK License Agreement](https://developer.android.com/studio/terms) for
+you: it installs its packages from Google's zips directly. A project that
+needs another platform or build-tools (the plugin's default moves with its
+version) installs it once per sandbox with `sdkmanager --licenses`, then
+`sdkmanager "build-tools;<version>"`, or asks for it to be pinned in devenv.
+The Android Gradle Plugin can download missing packages itself once the
+license is accepted. The command-line tools stay at 22.0 because from 23.0
+`sdkmanager` hands every command to Google's Android CLI, which downloads and
+updates itself and sends usage metrics by default.
+
+Changes to the toolchain reach a sandbox at its next rebuild (or when
+`provision.sh` runs again in it).
 
 ## Android emulator (opt-in)
 
@@ -432,9 +475,8 @@ it, and runs the command with `ANDROID_SERIAL` set to it.
 `devenv emulator connect` only connects and prints the serial, for plain
 `adb -s host.docker.internal:15555 …`. `devenv emulator status` says why the
 emulator can't be reached: not started on the host, or no policy rule for its
-port. Building an app also needs a JDK and the project's SDK packages; devenv
-installs only `adb`, into `ANDROID_HOME` (`~/.local/share/android-sdk`), where
-`sdkmanager` can add packages.
+port. The build itself runs in the sandbox, with the toolchain in
+[Building Android apps](#building-android-apps).
 
 **How the sandbox reaches it.** The emulator's adb port is published on the
 host's `127.0.0.1:15555` only. adb speaks raw TCP, not HTTP; sbx's proxy
@@ -456,10 +498,10 @@ environment for one run) and allow that port instead.
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, adb and whether the host's emulator answers. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, the Android build toolchain, adb and whether the host's emulator answers. |
 | `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
-| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, `start`, `entry` and doctor's token-mode Claude sign-in checks against a temporary home and a fake `/proc`, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
+| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-cmdline-tools <v\|latest>`, `android-platform <android-NN.N>`, `android-build-tools <v\|latest>`, `jdk <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `--list`. Prints the diff; never commits. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands and the Android toolchain installers against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, `start`, `entry` and doctor's token-mode Claude sign-in checks against a temporary home and a fake `/proc`, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
 | `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
@@ -525,8 +567,9 @@ git clone https://github.com/digigrant/devenv ~/devenv
 ~/devenv/provision.sh --plain            # add --yes to skip the apt prompts
 ```
 
-It installs the same pinned tools into `~/.local` (on x86_64 also `adb`, from
-Google's platform-tools, in `~/.local/share/android-sdk`), installs `gh` from
+It installs the same pinned tools into `~/.local` (on x86_64 also `adb` and the
+Android build toolchain: the JDK in `~/.local/share/jdk` and Google's SDK
+packages in `~/.local/share/android-sdk`), installs `gh` from
 GitHub's apt repository (adding its keyring and source), installs Node
 `NODE_VERSION` if node is missing or older than `NODE_MIN_VERSION`, installs
 Claude Code with its official installer if missing (the one documented
@@ -553,7 +596,7 @@ firstmate/config/      starting copy of Firstmate's config
 firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
-tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), Tailscale setup tests (fakes), emulator tests (fakes, real image), fixtures
+tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), Tailscale setup tests (fakes), emulator tests (fakes, real image), Android toolchain tests (fakes), fixtures
 ```
 
 ### herdr's Claude detection rules
@@ -645,6 +688,11 @@ when herdr is bumped past the version it was tested with.
   sandbox runs from `~/fm-projects/devenv`, so changes there take effect at
   once. Move them to a branch (`git -C ~/fm-projects/devenv stash`, then work
   in a worktree) or discard them.
+- **A Gradle build says an SDK package is missing, or that licences have not
+  been accepted.** The project wants a platform or build-tools that devenv
+  doesn't pin (often the Android Gradle Plugin's default build-tools after an
+  upgrade): `sdkmanager --licenses`, then `sdkmanager "<package>"`, or pin it
+  in devenv (`devenv bump android-build-tools <version>`).
 - **`devenv emulator` in the sandbox says the network policy doesn't let it
   reach `localhost:15555`.** On the host, once:
   `sbx policy allow network localhost:15555`. **"no emulator answers"**: start
@@ -663,9 +711,6 @@ when herdr is bumped past the version it was tested with.
   GitHub App with short-lived tokens through host-prepare's `github` secret
   (a `secret-get`-style command) and a short `SECRET_REFRESH_GITHUB`.
 - Worker effort and model profiles in Firstmate's `config/crew-dispatch.json`.
-- An Android build toolchain in the sandbox (a JDK, `sdkmanager` and the SDK
-  packages projects need), if phone-app projects don't bring their own.
-  devenv installs only `adb` today.
 - A second worker harness (e.g. Codex): `config/crew-harness` plus its install.
 - Bumping herdr past 0.8.0 once Firstmate verifies newer versions.
 - v3 kits, once a v3 Claude workload is available to build on: a v3 kit can

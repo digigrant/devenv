@@ -81,6 +81,10 @@ as_agent() { sudo -u agent -H --preserve-env=IS_SANDBOX,SANDBOX_NAME,WORKSPACE_D
 [ "$(as_agent 'adb --version' | sed -n 's/^Version \([0-9.]*\).*/\1/p')" = "$ANDROID_PLATFORM_TOOLS_VERSION" ] \
   && [ "$(as_agent 'echo "$ANDROID_HOME"')" = /home/agent/.local/share/android-sdk ] \
   && pass "adb $ANDROID_PLATFORM_TOOLS_VERSION on the agent's PATH, ANDROID_HOME set" || bad "adb or ANDROID_HOME"
+[ "$(as_agent 'echo "$JAVA_HOME"')" = /home/agent/.local/share/jdk ] && [ "$(as_agent 'command -v java')" = /home/agent/.local/share/jdk/bin/java ] \
+  && [ "$(as_agent 'readlink ~/.local/bin/sdkmanager')" = /home/agent/.local/share/android-sdk/cmdline-tools/latest/bin/sdkmanager ] \
+  && [ -f "/home/agent/.local/share/android-sdk/platforms/$ANDROID_PLATFORM/package.xml" ] \
+  && pass "the JDK and SDK packages in the agent's home, JAVA_HOME set, sdkmanager on PATH" || bad "JDK, SDK packages or JAVA_HOME"
 [ "$(stat -c %U "$CLONE/.git")" = agent ] && [ -z "$(as_agent "git -C $CLONE status --porcelain")" ] && pass "the clone is the agent's and clean" || bad "the clone is not the agent's or is dirty"
 for sk in grill-me grilling; do
   [ "$(readlink "/home/agent/.claude/skills/$sk")" = "$CLONE/skills/$sk" ] && pass "skill $sk linked from the clone" || bad "skill $sk not linked"

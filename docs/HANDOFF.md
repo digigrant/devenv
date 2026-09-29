@@ -9,7 +9,8 @@ refresh became configurable (branch
 `fm/devenv-design-host-prepare-anthropic-secret-col-14`), and again on
 2026-09-28 when Tailscale moved onto the host (branch
 `fm/devenv-tailscale-host`) and for the opt-in Android emulator (branch
-`fm/devenv-android-emulator`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
+`fm/devenv-android-emulator`), and on 2026-09-29 for the Android build
+toolchain in sandboxes (branch `fm/devenv-android-toolchain`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
 [HOST-VERIFY.md](HOST-VERIFY.md).
 
 **SPEC.md is current:** session 2 revised it to the design as built, including
@@ -105,6 +106,7 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Tailscale (D33, §6.14) | not in devenv; Tailscale ran on Windows | Tailscale runs in Linux on every host (the WSL 2 distro, or a Linux PC), off Windows. `devenv tailscale-setup` (host, interactive) adds Tailscale's apt repository as Tailscale documents, installs `tailscale` and `tailscale-archive-keyring`, enables tailscaled and, when needed, runs `sudo tailscale up` for the one browser sign-in; host `doctor` checks it all, including systemd in WSL and Tailscale on Windows. No auth key; nothing stored. `host-prepare` ignores Tailscale | Owner's decision, 2026-09-28 (option B), for the Magic Conch hub. Tailscale's WSL page says Tailscale on Windows and in WSL at once breaks WSL's Tailscale traffic, so the owner accepted uninstalling it on Windows. Install and sign-in are a new interactive command rather than part of `host-prepare`: the lifecycle hook can't answer sudo's password prompt or wait on a browser, and a sandbox mustn't depend on Tailscale. |
 | GitHub CLI (§6.3 step 1) | Ubuntu's `gh` from apt in plain mode; the sandbox image's own (Ubuntu's 2.46) in sbx mode | GitHub's current release from GitHub's own apt repository (`cli.github.com`), set up as GitHub documents (keyring in `/etc/apt/keyrings`, a `signed-by` source), in both modes and unpinned; it replaces the image's Ubuntu `gh` at every create | Ubuntu's 2.46 rejects `gh api --slurp` ("unknown flag"), which Firstmate's PR comment and review monitor uses, so the monitor failed on every PR. Owner's decision, 2026-09-28. |
 | Android emulator (D34, §6.15) | not in the spec | opt-in, one per host: `devenv emulator start\|stop\|status\|clean` runs a headless emulator in a Docker Engine container with `/dev/kvm`, adb published on the host's `127.0.0.1:15555`; sandboxes use it through one global rule the owner adds once (`sbx policy allow network localhost:15555`) with `devenv emulator connect\|run`; `adb` (Google's platform-tools, pinned) in every sandbox. devenv's own small image following Google's recipe, the SDK (5.1 GB) in a Docker volume, all from Google's zips pinned by sha256 | The owner wants workers to run emulator tests without leaving the sandbox (2026-09-28), and accepted the recommendation of an emulator on each Linux host reached through one firewall rule. The sandbox has no KVM and sbx's nested virtualization is macOS-only. See "Android emulator" below for the image choice. |
+| Android build toolchain (D35, §6.3 step 3b) | future work (§11): "if phone-app projects don't bring their own" | in every sandbox and plain mode on x86_64: Temurin JDK 21 in `~/.local/share/jdk` (`JAVA_HOME`, first on `PATH`) and, in devenv's SDK (`ANDROID_HOME`), cmdline-tools 22.0, `platforms;android-37.0` and build-tools 36.0.0, unpacked from Google's zips pinned by sha256, each with the `package.xml` sdkmanager would write. No SDK license accepted on the owner's behalf; no Gradle (each project's wrapper) | The Magic Conch app's worker had to install a JDK, Gradle and the SDK inside its own worktree (`android/.tools`), and Firstmate's validation then couldn't run the app's tests without `android-37.0`. Owner's queued item, 2026-09-29. See "Android build toolchain" below. |
 
 ## Verification status
 
@@ -121,6 +123,7 @@ re-run with the new one.
 | V6, V10, V11, V12 | Host checks pending. In the sandbox: memory written by Claude lands in the state folder through the symlink; Firstmate's detect-only bootstrap reports nothing missing except the optional `PRESENTATION_UNAVAILABLE: lavish-axi`. |
 | V7 | Replaced by the clone at create (HOST-VERIFY V7). The first layout's check passed on the host. |
 | AC5, AC8, AC9, AC12, AC13–AC16 | Checked in the sandbox (AC13 on a simulated host, including the new "workspace inside the checkout" case). |
+| Android build toolchain | In the sandbox: the installers against dummy downloads (`tests/android-toolchain.sh`), real `provision.sh --plain` in both Ubuntu containers (sdkmanager lists the pinned packages, `java` is Temurin's) and the sbx simulation; with the same JDK and SDK assembled by hand from the pinned downloads, a copy of the Magic Conch app (`fm/mc-android-foundation`) builds (`assembleDebug`) and runs its JVM and Robolectric tests with no license accepted and no download into the SDK. Pending: a real sandbox rebuild. |
 | V14, AC18 (Android emulator) | In the sandbox: raw TCP through the proxy, the real image and SDK volume (`tests/emulator-image.sh`), the command against fakes (`tests/emulator.sh`), and the live policy diagnosis. Everything on a host is pending: HOST-VERIFY §11. |
 
 ## Open work
@@ -237,9 +240,19 @@ emulator, system image and platform-tools come from Google's own repository,
 pinned by sha256 in `versions.env` and moved with `devenv bump`, like every
 other download.
 
-Possible next steps, not built: a JDK and SDK packages in the sandbox for
-building apps (today only `adb`); more than one emulator (API levels,
+Possible next steps, not built: more than one emulator (API levels,
 parallel runs); a lighter device (the API 36 image needs 4 GB of guest RAM).
+
+### 7. Android build toolchain
+
+Built on 2026-09-29 (branch `fm/devenv-android-toolchain`); it reaches a
+sandbox at its next rebuild. After it: `devenv doctor` lists the JDK and the
+three SDK packages as ok, and a phone app's `./gradlew assembleDebug
+testDebugUnitTest` runs without a toolchain of its own (its `android/.tools`
+can go). The build-tools pin follows the Android Gradle Plugin's default
+(9.4.1: 36.0.0); when a project upgrades the plugin, `devenv bump
+android-build-tools <its default>`, or the project runs `sdkmanager
+--licenses` and installs it.
 
 ## Facts and traps learned
 
@@ -336,6 +349,35 @@ parallel runs); a lighter device (the API 36 image needs 4 GB of guest RAM).
   the emulator's build number and the image's revision.
 - `adb --version` prints the protocol version (1.0.41) before the release
   (`Version 37.0.1-…`).
+
+**Android build toolchain (cmdline-tools 22.0, android-37.0, build-tools 36.0.0, Temurin 21)**
+- A platform unzipped without a `package.xml` is invisible to sdkmanager and
+  the Android Gradle Plugin: their fallback reader of `source.properties`
+  doesn't take `AndroidVersion.ApiLevel=37.0`, so the plugin tries to
+  download `platforms;android-37.0` and fails for want of an accepted
+  license. build-tools is recognized from `source.properties` alone. devenv
+  writes each package's `package.xml` from its `source.properties`
+  (schema `repository2/03`, as Google's index uses; no license element).
+- build-tools zips hold a folder named for an old Android release
+  (`build-tools_r36_linux.zip` holds `android-16/`), so the installer takes
+  whatever single folder a zip holds.
+- The Android Gradle Plugin's default build-tools is
+  `ToolsRevisionUtils.DEFAULT_BUILD_TOOLS_REVISION` in its `builder` jar
+  (9.4.1: 36.0.0). A build without `buildToolsVersion` wants exactly that.
+- From cmdline-tools 23.0, `sdkmanager` is a shell script that runs Google's
+  "Android CLI" (`cmdline-tools/latest/bin/android`), which unpacks and
+  updates a 90 MB binary under `~/.android` and sends usage metrics unless
+  `--no-metrics`. 22.0 is the last with the classic Java `sdkmanager`.
+- `services.gradle.org` redirects Gradle downloads to `github.com`, which the
+  sandbox proxy re-signs with its own CA. That CA is in the system's CA list
+  for Java (`/etc/ssl/certs/java/cacerts`, from ca-certificates-java) but not
+  in Temurin's, so the wrapper failed with `PKIX path building failed` until
+  the JDK's `lib/security/cacerts` pointed at the system's list, as Ubuntu's
+  own JDK packages do. Maven Central, Google's Maven and the Gradle plugin
+  portal aren't re-signed.
+- The sandbox has 7.6 GB of memory and no swap: a Gradle build beside another
+  worker's Gradle daemons was killed ("Gradle build daemon disappeared
+  unexpectedly"); `--max-workers=2` and a smaller `-Xmx` got through.
 
 **Secrets (Infisical, gnome-keyring)**
 - Infisical Universal Auth: the Client ID is in the Universal Auth section of
