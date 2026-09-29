@@ -31,6 +31,7 @@ cmd_start() {
   resolve_paths "$mode"
   export PATH="$LOCAL_BIN:$DEVENV_ROOT/bin:$PATH"
   [ "$mode" = sbx ] && wait_for_sbx_startup
+  # After the claude kit's startup, so a login it seeds is moved aside too (V1).
   apply_claude_config with-integrations || warn "applying Claude settings failed"
   install_herdr_config || warn "installing herdr config failed"
   link_claude_memory || warn "linking Claude memory failed"

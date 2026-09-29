@@ -157,6 +157,22 @@ doctor_host() {
   echo "Operating rule: $(operating_rule)"
 }
 
+# Token mode's two ways to lose the setup-token in Claude's daemon (V1): a
+# stored claude.ai login, and a running daemon without CLAUDE_CODE_OAUTH_TOKEN.
+doctor_claude_token_mode() {
+  local out t pids
+  claude_token_mode_active || return 0
+  out=$(claude_token_mode_problems)
+  if [ -n "$out" ]; then
+    while IFS= read -r t; do _fail "$t"; done <<<"$out"
+    return 0
+  fi
+  pids=$(claude_daemon_pids | paste -sd' ' -)
+  _pass "no stored claude.ai login in ~/.claude/.credentials.json"
+  if [ -n "$pids" ]; then _pass "Claude's daemon (pid $pids) has CLAUDE_CODE_OAUTH_TOKEN"
+  else _pass "no Claude daemon is running"; fi
+}
+
 doctor_env() {
   local where=$1 t pin cur login out src
   resolve_paths "$where"
@@ -209,6 +225,7 @@ doctor_env() {
       esac
     fi
   fi
+  doctor_claude_token_mode
 
   echo "herdr and Firstmate"
   if herdr_server_running; then

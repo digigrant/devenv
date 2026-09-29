@@ -117,14 +117,102 @@ link_skills() {
   done
 }
 
+# ---------------------------------------------------------------- token mode
+# With CLAUDE_AUTH=token Claude signs in with CLAUDE_CODE_OAUTH_TOKEN. But
+# Claude Code starts its daemon, which hosts background sessions (the first
+# mate's conversation runs in one), without that variable whenever
+# ~/.claude/.credentials.json holds a claude.ai login with a refresh token.
+# Those sessions then use the stored login, and a login that lacks the
+# inference scope ends in "Not logged in · Please run /login". sbx's claude kit
+# seeds such a login when the host holds an Anthropic subscription (OAuth)
+# credential, so in token mode devenv removes it before the first mate starts.
+CLAUDE_CREDENTIALS_ASIDE_SUFFIX=.devenv-stored-login
+
+claude_credentials_file() { printf '%s/.claude/.credentials.json' "$HOME"; }
+
+# Token mode is in force wherever devenv supplies the setup-token: always in
+# sbx (host-prepare's custom secret), and in plain mode only when the variable
+# is set, so a laptop's own /login is never touched.
+claude_token_mode_active() {
+  [ "$CLAUDE_AUTH" = token ] || return 1
+  [ "$(detect_mode)" = sbx ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]
+}
+
+# true when ~/.claude/.credentials.json holds a claude.ai login with a refresh
+# token, the very condition Claude's daemon tests.
+claude_stored_login_present() {
+  local f
+  f=$(claude_credentials_file)
+  [ -s "$f" ] && jq -e '(.claudeAiOauth.refreshToken // "") != ""' "$f" >/dev/null 2>&1
+}
+
+# In token mode, move a stored claude.ai login out of ~/.claude/.credentials.json
+# into <file>.devenv-stored-login (same mode; put it back to undo). Other
+# entries in the file, such as MCP logins, stay. A login stored by /login in
+# token mode goes the same way at the next start or entry. Never fails.
+claude_drop_stored_login() {
+  local f aside rest
+  claude_token_mode_active || return 0
+  claude_stored_login_present || return 0
+  f=$(claude_credentials_file)
+  aside=$f$CLAUDE_CREDENTIALS_ASIDE_SUFFIX
+  if ! (umask 077 && jq '{claudeAiOauth}' "$f" | write_if_changed "$aside" 0600 >/dev/null) \
+     || ! rest=$(jq -c 'del(.claudeAiOauth)' "$f"); then
+    warn "could not set the stored claude.ai login in $f aside; Claude's daemon will drop CLAUDE_CODE_OAUTH_TOKEN"
+    return 0
+  fi
+  if [ "$rest" = '{}' ]; then rm -f "$f"; else printf '%s\n' "$rest" | write_if_changed "$f" 0600 >/dev/null; fi \
+    || { warn "could not remove the stored claude.ai login from $f"; return 0; }
+  ok "CLAUDE_AUTH=token: moved the stored claude.ai login out of ~/.claude/.credentials.json (now ~/.claude/.credentials.json$CLAUDE_CREDENTIALS_ASIDE_SUFFIX), so Claude's daemon keeps CLAUDE_CODE_OAUTH_TOKEN"
+}
+
+# PIDs of the running Claude daemons (`claude daemon run …`, as Claude spawns
+# it), one per line. /proc is read through host_path so tests can fake it.
+claude_daemon_pids() {
+  local d i argv=()
+  for d in "$(host_path /proc)"/[0-9]*; do
+    mapfile -d '' -t argv < "$d/cmdline" 2>/dev/null || continue
+    [[ "${argv[0]:-} ${argv[1]:-}" == *claude* ]] || continue
+    for i in "${!argv[@]}"; do
+      if [ "${argv[i]}" = daemon ] && [ "${argv[i+1]:-}" = run ]; then echo "${d##*/}"; break; fi
+    done
+  done
+}
+
+# Problems with a running daemon that lacks CLAUDE_CODE_OAUTH_TOKEN, one per
+# line. A daemon whose environment can't be read is not reported.
+claude_daemon_token_problems() {
+  local pid env
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    env="$(host_path /proc)/$pid/environ"
+    [ -r "$env" ] || continue
+    tr '\0' '\n' < "$env" | grep -q '^CLAUDE_CODE_OAUTH_TOKEN=.' && continue
+    echo "Claude's daemon (pid $pid) has no CLAUDE_CODE_OAUTH_TOKEN, so background sessions, including the first mate's, can't use the setup-token; once the stored login is gone, run: claude daemon stop --any (it ends the background sessions), then start Claude again"
+  done < <(claude_daemon_pids)
+}
+
+# Checks used by doctor in token mode: prints one problem per line, nothing
+# when all is well.
+claude_token_mode_problems() {
+  claude_token_mode_active || return 0
+  if claude_stored_login_present; then
+    echo "a stored claude.ai login is in ~/.claude/.credentials.json, so Claude's daemon drops CLAUDE_CODE_OAUTH_TOKEN and background sessions can say \"Not logged in\"; run: devenv start (it moves the login aside)"
+  fi
+  claude_daemon_token_problems
+}
+
 # Everything §6.4 re-applies: files, settings merge, CLAUDE.md, integrations.
 # Serialized with a lock, because `devenv start` (a detached startup hook) and
-# `devenv entry` may both run it at the same moment.
+# `devenv entry` may both run it at the same moment. Both run it before the
+# first mate starts, so the token-mode cleanup comes first: before anything
+# below runs claude.
 apply_claude_config() {
   local integrations=${1:-with-integrations}
   mkdir -p "$DEVENV_CACHE"
   (
     if have flock; then flock -w 30 9 || warn "timed out waiting for $DEVENV_CACHE/claude-apply.lock"; fi
+    claude_drop_stored_login
     write_paths_env
     install_claude_files
     render_claude_md | write_if_changed "$HOME/.claude/CLAUDE.md" 0644 >/dev/null
