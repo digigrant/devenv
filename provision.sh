@@ -162,10 +162,13 @@ step_binaries() {
   for t in "${DEVENV_BINARIES[@]}"; do install_binary "$t"; done
 }
 
-# 3b. adb: Google's platform-tools, pinned, in devenv's Android SDK folder
-# (ANDROID_HOME, step 6), with adb linked into ~/.local/bin. x86_64 only.
+# 3b. Android: Google's platform-tools and the build toolchain (a JDK, the
+# command-line tools, a platform and build-tools), pinned, in devenv's Android
+# SDK folder (ANDROID_HOME, step 6) and ~/.local/share/jdk (JAVA_HOME), with
+# adb, sdkmanager and avdmanager linked into ~/.local/bin. x86_64 only.
 step_android() {
   install_platform_tools
+  install_android_toolchain
 }
 
 # 4. npm globals, into the existing prefix (plain mode falls back to ~/.local).
@@ -220,11 +223,16 @@ env_block_content() {
     # shellcheck disable=SC2016
     printf 'case ":$PATH:" in *":%s/bin:"*) ;; *) PATH="%s/bin:$PATH" ;; esac\n' "$NPM_CONFIG_PREFIX" "$NPM_CONFIG_PREFIX"
   fi
-  # devenv's Android SDK (adb; projects can add packages with sdkmanager),
-  # unless ANDROID_HOME is already set.
+  # devenv's Android SDK and JDK (projects can add SDK packages with
+  # sdkmanager), unless ANDROID_HOME or JAVA_HOME is already set; java from
+  # JAVA_HOME comes first on PATH.
   if android_supported; then
     # shellcheck disable=SC2016
     printf 'export ANDROID_HOME="${ANDROID_HOME:-%s}"\n' "$(android_sdk_dir)"
+    # shellcheck disable=SC2016
+    printf 'export JAVA_HOME="${JAVA_HOME:-%s}"\n' "$(jdk_dir)"
+    # shellcheck disable=SC2016
+    printf '%s\n' 'case ":$PATH:" in *":$JAVA_HOME/bin:"*) ;; *) PATH="$JAVA_HOME/bin:$PATH" ;; esac'
   fi
   # shellcheck disable=SC2016
   printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
@@ -321,7 +329,10 @@ summary() {
   for t in "${DEVENV_BINARIES[@]}"; do printf '  %-22s %s\n' "$t" "$(bin_installed_version "$t")"; done
   for t in "${DEVENV_NPM_PACKAGES[@]}"; do printf '  %-22s %s\n' "$t" "$(npm_installed_version "$t")"; done
   printf '  %-22s %s\n' node "$(node_installed_version)"
-  if android_supported; then printf '  %-22s %s\n' adb "$(adb_installed_version)"; fi
+  if android_supported; then
+    printf '  %-22s %s\n' adb "$(adb_installed_version)"
+    while read -r t _ v; do printf '  %-22s %s\n' "$t" "$v"; done < <(android_toolchain_versions)
+  fi
   if have gh; then printf '  %-22s %s\n' gh "$(gh --version 2>/dev/null | extract_version)"; fi
   if have claude; then printf '  %-22s %s\n' claude "$(claude --version 2>/dev/null | extract_version)"; fi
 }

@@ -9,6 +9,10 @@
 #   devenv bump [--repo PATH] npm <package> <version|latest>
 #   devenv bump [--repo PATH] node <version|latest-lts>
 #   devenv bump [--repo PATH] platform-tools <version|latest>
+#   devenv bump [--repo PATH] android-cmdline-tools <version|latest>
+#   devenv bump [--repo PATH] android-platform <platform, e.g. android-37.0>
+#   devenv bump [--repo PATH] android-build-tools <version|latest>
+#   devenv bump [--repo PATH] jdk <version|latest>
 #   devenv bump [--repo PATH] android-emulator <build|latest>
 #   devenv bump [--repo PATH] android-system-image <api> [tag]
 #   devenv bump [--repo PATH] android-base-image [image:tag]
@@ -16,7 +20,7 @@
 
 HERDR_MANIFEST_PATH=distribution/agent-detection/claude.toml
 
-bump_usage() { sed -n '5,16p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
+bump_usage() { sed -n '5,20p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
 
 # GitHub REST call: gh when it works, anonymous curl otherwise.
 gh_api() {
@@ -177,6 +181,64 @@ bump_platform_tools() {
   set_pin ANDROID_PLATFORM_TOOLS_VERSION "$ver"
 }
 
+bump_android_cmdline_tools() {
+  local want=${1:-latest} line ver url sha1 build
+  line=$(android_repo_packages repository2-3.xml | awk -v p="cmdline-tools;$want" '$1 == p && $4 == "linux"' | head -n 1)
+  [ -n "$line" ] || die "Google's repository lists no stable cmdline-tools;$want for Linux"
+  read -r _ ver url _ _ sha1 <<<"$line"
+  build=${url#commandlinetools-linux-}; build=${build%_latest.zip}
+  set_pin ANDROID_CMDLINE_TOOLS_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/$url" "$sha1")"
+  set_pin ANDROID_CMDLINE_TOOLS_VERSION "$ver"
+  set_pin ANDROID_CMDLINE_TOOLS_BUILD "$build"
+  [ "${ver%%.*}" -lt 23 ] \
+    || warn "cmdline-tools $ver: its sdkmanager runs Google's Android CLI, which downloads and updates itself and sends usage metrics by default (see versions.env)"
+}
+
+bump_android_platform() {
+  local p=${1:?usage: devenv bump android-platform <platform, e.g. android-37.0>} line rev zip sha1
+  p=android-${p#android-}
+  line=$(android_repo_packages repository2-3.xml | awk -v n="platforms;$p" '$1 == n' | head -n 1)
+  [ -n "$line" ] || die "Google's repository lists no stable platforms;$p (devenv bump --list shows the latest)"
+  read -r _ rev zip _ _ sha1 <<<"$line"
+  set_pin ANDROID_PLATFORM_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/$zip" "$sha1")"
+  set_pin ANDROID_PLATFORM "$p"
+  set_pin ANDROID_PLATFORM_REVISION "$rev"
+  set_pin ANDROID_PLATFORM_ZIP "$zip"
+}
+
+bump_android_build_tools() {
+  local want=${1:?usage: devenv bump android-build-tools <version|latest>} line ver zip sha1
+  line=$(android_repo_packages repository2-3.xml | awk '$1 ~ /^build-tools;[0-9.]+$/ && $4 == "linux"')
+  if [ "$want" = latest ]; then line=$(printf '%s\n' "$line" | sort -k2,2V | tail -n 1)
+  else line=$(printf '%s\n' "$line" | awk -v p="build-tools;$want" '$1 == p' | head -n 1); fi
+  [ -n "$line" ] || die "Google's repository lists no stable build-tools;$want for Linux"
+  read -r _ ver zip _ _ sha1 <<<"$line"
+  set_pin ANDROID_BUILD_TOOLS_SHA256 "$(android_zip_sha256 "$ANDROID_REPO_URL/$zip" "$sha1")"
+  set_pin ANDROID_BUILD_TOOLS_VERSION "$ver"
+  set_pin ANDROID_BUILD_TOOLS_ZIP "$zip"
+  log "a build that sets no buildToolsVersion needs its Android Gradle Plugin's default build-tools; check that $ver is it"
+}
+
+# Temurin's releases for a JDK major version: GitHub's adoptium/temurin<major>-binaries.
+temurin_repo() { printf 'adoptium/temurin%s-binaries' "${1%%.*}"; }
+
+bump_jdk() {
+  local want=${1:-latest} repo json ver asset sha
+  if [ "$want" = latest ]; then
+    repo=$(temurin_repo "$(sed -n 's/^JDK_VERSION=//p' "$BUMP_FILE")")
+    json=$(gh_api "repos/$repo/releases/latest") || die "no latest release in $repo"
+  else
+    want=${want#jdk-}; repo=$(temurin_repo "$want")
+    json=$(gh_api "repos/$repo/releases/tags/jdk-${want/+/%2B}") || die "no Temurin release jdk-$want in $repo"
+  fi
+  ver=$(printf '%s' "$json" | jq -r .tag_name); ver=${ver#jdk-}
+  asset="OpenJDK${ver%%.*}U-jdk_x64_linux_hotspot_${ver/+/_}.tar.gz"
+  sha=$(release_digest "$json" "$asset")
+  [ -n "$sha" ] || die "Temurin jdk-$ver has no recorded digest for $asset"
+  set_pin JDK_VERSION "$ver"
+  set_pin JDK_SHA256 "$sha"
+}
+
 bump_android_emulator() {
   local want=${1:-latest} line ver url sha1 build
   line=$(android_repo_packages repository2-3.xml | awk '$1 == "emulator" && $4 == "linux" && $5 == "x64"')
@@ -214,7 +276,7 @@ bump_android_base_image() {
 }
 
 bump_list() {
-  local row latest
+  local row latest index
   printf '%-22s %-14s %s\n' TOOL PINNED LATEST
   latest=$(release_json herdrdev/herdr latest 2>/dev/null | jq -r '.tag_name // "?"')
   printf '%-22s %-14s %s  (Firstmate-verified: %s)\n' herdr "$HERDR_VERSION" "${latest#v}" "$(herdr_verified_versions | tr '\n' ' ')"
@@ -232,6 +294,15 @@ bump_list() {
   printf '%-22s %-14s %s\n' node "$NODE_VERSION" "${latest#v}"
   latest=$(android_repo_packages repository2-3.xml 2>/dev/null | awk '$1 == "platform-tools" && $4 == "linux" { print $2; exit }')
   printf '%-22s %-14s %s\n' platform-tools "$ANDROID_PLATFORM_TOOLS_VERSION" "${latest:-?}"
+  index=$(android_repo_packages repository2-3.xml 2>/dev/null || true)
+  latest=$(printf '%s\n' "$index" | awk '$1 == "cmdline-tools;latest" && $4 == "linux" { print $2; exit }')
+  printf '%-22s %-14s %s\n' android-cmdline-tools "$ANDROID_CMDLINE_TOOLS_VERSION" "${latest:-?}"
+  latest=$(printf '%s\n' "$index" | awk '$1 ~ /^platforms;android-[0-9]+(\.[0-9]+)?$/ { sub(/^platforms;/, "", $1); print $1 " r" $2 }' | sort -V | tail -n 1)
+  printf '%-22s %-14s %s\n' android-platform "$ANDROID_PLATFORM r$ANDROID_PLATFORM_REVISION" "${latest:-?}"
+  latest=$(printf '%s\n' "$index" | awk '$1 ~ /^build-tools;[0-9.]+$/ && $4 == "linux" { print $2 }' | sort -V | tail -n 1)
+  printf '%-22s %-14s %s  (keep it at the Android Gradle Plugin'"'"'s default)\n' android-build-tools "$ANDROID_BUILD_TOOLS_VERSION" "${latest:-?}"
+  latest=$(gh_api "repos/$(temurin_repo "$JDK_VERSION")/releases/latest" 2>/dev/null | jq -r '.tag_name // "?"')
+  printf '%-22s %-14s %s\n' jdk "$JDK_VERSION" "${latest#jdk-}"
   latest=$(android_repo_packages repository2-3.xml 2>/dev/null | awk '$1 == "emulator" && $4 == "linux" && $5 == "x64" { u = $3; sub(/^emulator-linux_x64-/, "", u); sub(/\.zip$/, "", u); print $2 " (" u ")"; exit }')
   printf '%-22s %-14s %s\n' android-emulator "$ANDROID_EMULATOR_VERSION ($ANDROID_EMULATOR_BUILD)" "${latest:-?}"
   latest=$(android_repo_packages "sys-img/$ANDROID_SYSTEM_IMAGE_TAG/sys-img2-3.xml" 2>/dev/null \
@@ -277,6 +348,10 @@ cmd_bump() {
     npm) bump_npm "$@" ;;
     node) bump_node "$@" ;;
     platform-tools) bump_platform_tools "$@" ;;
+    android-cmdline-tools) bump_android_cmdline_tools "$@" ;;
+    android-platform) bump_android_platform "$@" ;;
+    android-build-tools) bump_android_build_tools "$@" ;;
+    jdk) bump_jdk "$@" ;;
     android-emulator) bump_android_emulator "$@" ;;
     android-system-image) bump_android_system_image "$@" ;;
     android-base-image) bump_android_base_image "$@" ;;

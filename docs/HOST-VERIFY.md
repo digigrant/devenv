@@ -1038,8 +1038,8 @@ Run this on each host (WSL2 and the native Linux laptop); report which one.
 
 7. **A real test** (optional, if a phone-app project with instrumented tests
    is at hand): in its worktree **(in sandbox)**, `devenv emulator run --
-   ./gradlew connectedDebugAndroidTest`. It needs a JDK and the project's SDK
-   packages, which devenv doesn't install; report what was missing.
+   ./gradlew connectedDebugAndroidTest`. It builds with the sandbox's own
+   JDK and SDK packages (§12); report anything it says is missing.
 
 8. **Stop and clean:**
    ```sh
@@ -1058,3 +1058,35 @@ Run this on each host (WSL2 and the native Linux laptop); report which one.
    `devenv emulator start` boots it again in 1 to 3 minutes.
 
 Switch the checkout back to `main` once the PR is merged.
+
+## 12. Android build toolchain (D35)
+
+Every sandbox gets a pinned JDK and the SDK packages a phone app's Gradle
+build needs (README: "Building Android apps"). It is installed at create, so
+it reaches `dev` at the next rebuild after the PR is merged
+(`cd ~/devenv && git pull && sbx env rm`, then `sbx env run`); nothing runs on
+the host. The agent checked it in containers and with a copy of the Magic
+Conch app; this is the check in the real sandbox.
+
+1. **(in sandbox)** Doctor's Android section:
+   ```sh
+   devenv doctor | sed -n '/^Android/,/^devenv check/p'
+   ```
+   Expected: `ok    jdk 21.0.12.1+1`, `ok    cmdline-tools;latest 22.0`,
+   `ok    platforms;android-37.0 2`, `ok    build-tools;36.0.0 36.0.0` and
+   `ok    adb 37.0.1`, then the emulator lines. Paste any `FAIL`.
+2. **(in sandbox)** The environment:
+   ```sh
+   echo "$JAVA_HOME $ANDROID_HOME"; java -version 2>&1 | sed -n 2p
+   ls -l "$JAVA_HOME/lib/security/cacerts"
+   sdkmanager --list_installed 2>/dev/null | grep '|'
+   ```
+   Expected: `/home/agent/.local/share/jdk /home/agent/.local/share/android-sdk`,
+   `OpenJDK Runtime Environment Temurin-21.0.12.1+1 …`, `cacerts ->
+   /etc/ssl/certs/java/cacerts`, and the four packages listed.
+3. **(in sandbox)** A phone app builds without its own toolchain: ask the
+   first mate to have a worker run `./gradlew assembleDebug testDebugUnitTest`
+   in the Magic Conch app's `android/` folder with nothing from its
+   `android/.tools` on the environment. Report whether it builds, and any
+   message about a missing SDK package or licences not accepted (then say
+   which package).

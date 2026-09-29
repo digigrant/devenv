@@ -256,7 +256,12 @@ doctor_env() {
   if [ -z "$out" ]; then _pass "overlay applied, status line sha256 matches"
   else while IFS= read -r t; do _fail "$t"; done <<<"$out"; fi
 
-  echo "Android (adb, and the host's emulator)"
+  echo "Android (the build toolchain, adb, and the host's emulator)"
+  if android_supported; then
+    while read -r t pin cur; do
+      [ "$cur" = "$pin" ] && _pass "$t $cur" || _fail "$t ${cur:-missing} (pinned $pin); run: $DEVENV_ROOT/provision.sh"
+    done < <(android_toolchain_versions)
+  fi
   emu_print_report < <(emu_env_report) || true
 
   echo "devenv check"

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Fake curl for tests/secrets.sh and tests/tailscale.sh: answers Infisical's
-# Universal Auth login and single-secret read, and GitHub's /user, with dummy
-# values, and serves a dummy key for Tailscale's apt repository. Logs its argv
-# to $FAKE_LOG/argv. Like devenv's calls, the Infisical and GitHub answers
-# expect -w '\n%{http_code}', so they print the body, a newline and the status
-# code.
+# Fake curl for tests/secrets.sh, tests/tailscale.sh and
+# tests/android-toolchain.sh: answers Infisical's Universal Auth login and
+# single-secret read, and GitHub's /user, with dummy values, serves a dummy key
+# for Tailscale's apt repository, and serves Google's SDK zips and Temurin's
+# JDK from $FAKE_DOWNLOADS (by file name). Logs its argv to $FAKE_LOG/argv.
+# Like devenv's calls, the Infisical and GitHub answers expect
+# -w '\n%{http_code}', so they print the body, a newline and the status code.
 #   FAKE_LOGIN_CODE / FAKE_READ_CODE  force an HTTP status (e.g. 401)
 #   FAKE_TS_KEY_FAIL=1                the Tailscale key download fails (curl -f)
 set -euo pipefail
@@ -72,6 +73,11 @@ case "$url" in
   https://pkgs.tailscale.com/stable/*/*.noarmor.gpg)
     [ -z "${FAKE_TS_KEY_FAIL:-}" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     printf 'fake tailscale apt key for %s\n' "${url#https://pkgs.tailscale.com/stable/}" > "${out:-/dev/stdout}"
+    ;;
+  https://dl.google.com/android/repository/*|https://github.com/adoptium/*/releases/download/*)
+    f="${FAKE_DOWNLOADS:-/nonexistent}/${url##*/}"
+    [ -f "$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    cp "$f" "${out:?fake curl: downloads need -o}"
     ;;
   *) echo "fake curl: unexpected url $url" >&2; exit 7 ;;
 esac

@@ -5,7 +5,8 @@
 #   2. tests/secrets.sh: secret-get, doctor and host-prepare against a fake
 #      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9); and
 #      tests/emulator.sh: devenv emulator against a fake docker, adb and sbx
-#      (spec §6.15)
+#      (spec §6.15); and tests/android-toolchain.sh: provision's installers
+#      for adb, the JDK and the SDK packages against dummy downloads
 #   3. tests/tailscale.sh: tailscale-setup and doctor's Tailscale checks
 #      against fake apt, systemd, Tailscale and Windows (spec §6.14)
 #      and tests/claude-auth.sh: devenv start, entry and doctor's token-mode
@@ -13,7 +14,8 @@
 #   4. shellcheck on every script (installed shellcheck, or the pinned image)
 #   5. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions (gh from GitHub's apt
-#      repository), a clean second run, and `devenv check` exiting 0.
+#      repository; the JDK and SDK packages, which sdkmanager lists), a
+#      clean second run, and `devenv check` exiting 0.
 #   6. tests/sbx-sim.sh: the kit's own install and startup snippets in a
 #      container laid out like a Docker Sandbox (the devenv clone, the
 #      root-to-agent handoff, ownership, skill links, GitHub's gh replacing
@@ -69,6 +71,10 @@ cmd_test() {
   echo "== emulator (fakes)"
   if bash "$DEVENV_ROOT/tests/emulator.sh"; then results+=("PASS emulator")
   else results+=("FAIL emulator"); rc=1; fi
+
+  echo "== android toolchain (fakes)"
+  if bash "$DEVENV_ROOT/tests/android-toolchain.sh"; then results+=("PASS android toolchain")
+  else results+=("FAIL android toolchain"); rc=1; fi
 
   echo "== tailscale (fakes)"
   if bash "$DEVENV_ROOT/tests/tailscale.sh"; then results+=("PASS tailscale")

@@ -79,6 +79,16 @@ check_version adb 'adb --version | sed -n "s/^Version //p"' "$ANDROID_PLATFORM_T
 [ "$(as_tester "$env_sh; echo \"\$ANDROID_HOME\"")" = /home/tester/.local/share/android-sdk ] \
   && [ "$(as_tester 'readlink ~/.local/bin/adb')" = /home/tester/.local/share/android-sdk/platform-tools/adb ] \
   && pass "ANDROID_HOME is devenv's SDK folder, adb linked from it" || bad "ANDROID_HOME or the adb link"
+[ "$(as_tester "$env_sh; echo \"\$JAVA_HOME\"")" = /home/tester/.local/share/jdk ] \
+  && [ "$(as_tester "$env_sh; command -v java")" = /home/tester/.local/share/jdk/bin/java ] \
+  && as_tester "$env_sh; java -version 2>&1" | grep -qF "Temurin-$JDK_VERSION" \
+  && pass "JAVA_HOME is devenv's JDK (Temurin $JDK_VERSION), its java first on PATH" || bad "JAVA_HOME or java: $(as_tester "$env_sh; java -version 2>&1" | head -n 2)"
+sdk_list=$(as_tester "$env_sh; sdkmanager --list_installed 2>/dev/null" || true)
+for p in "cmdline-tools;latest $ANDROID_CMDLINE_TOOLS_VERSION" "platforms;$ANDROID_PLATFORM $ANDROID_PLATFORM_REVISION" \
+    "build-tools;$ANDROID_BUILD_TOOLS_VERSION $ANDROID_BUILD_TOOLS_VERSION" "platform-tools $ANDROID_PLATFORM_TOOLS_VERSION"; do
+  printf '%s\n' "$sdk_list" | awk -F'|' -v p="${p% *}" -v v="${p##* }" '{ gsub(/ /, "") } $1 == p && $2 == v { f = 1 } END { exit !f }' \
+    && pass "sdkmanager lists ${p% *} ${p##* }" || bad "sdkmanager does not list ${p% *} ${p##* }"
+done
 check_version gh-axi 'jq -r .version "$(npm root -g)/gh-axi/package.json"' "$NPM_GH_AXI"
 check_version chrome-devtools-axi 'jq -r .version "$(npm root -g)/chrome-devtools-axi/package.json"' "$NPM_CHROME_DEVTOOLS_AXI"
 check_version tasks-axi 'jq -r .version "$(npm root -g)/tasks-axi/package.json"' "$NPM_TASKS_AXI"
