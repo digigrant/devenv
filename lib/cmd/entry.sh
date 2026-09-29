@@ -57,6 +57,8 @@ cmd_entry() {
   export PATH="$LOCAL_BIN:$DEVENV_ROOT/bin:$PATH"
   # V10 fallback: re-apply settings in case anything rewrote settings.json
   # after `devenv start` (which is detached and may also still be running).
+  # Also, in token mode, moves a stored claude.ai login aside before the first
+  # mate starts (V1: it makes Claude's daemon drop CLAUDE_CODE_OAUTH_TOKEN).
   apply_claude_config with-integrations || warn "applying Claude settings failed"
   print_warnings
   case "$choice" in

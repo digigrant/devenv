@@ -213,6 +213,18 @@ mate and every worker run on your Claude subscription through the long-lived
   sandbox stays signed in) and makes a new one only when sbx has none.
 - Firstmate needs no changes: workers inherit the variable, and `quota-axi`
   reads your subscription's usage windows with it.
+- No stored claude.ai login may exist in the sandbox in this mode. Claude's
+  daemon, which hosts the first mate's conversation, starts without
+  `CLAUDE_CODE_OAUTH_TOKEN` whenever `~/.claude/.credentials.json` holds one,
+  and sbx's `claude` kit seeds one when your host has an Anthropic
+  subscription (OAuth) credential. `devenv start` and `devenv entry` therefore
+  move it to `~/.claude/.credentials.json.devenv-stored-login` before the
+  first mate starts (login mode is never touched), and `devenv doctor` fails
+  while one exists or while a running Claude daemon lacks the variable. To
+  make the setup-token the only path, also remove the host's own `anthropic`
+  OAuth secret from sbx (a host action; see HOST-VERIFY V1): while it exists,
+  the proxy signs requests to `api.anthropic.com` with it whatever the sandbox
+  sends.
 - The token is inference-only by design: claude.ai connectors, Remote Control,
   Claude in Chrome and plugin sync don't work with it. Nothing in devenv or
   Firstmate uses them.
@@ -447,7 +459,7 @@ environment for one run) and allow that port instead.
 | `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, adb and whether the host's emulator answers. |
 | `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
 | `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, `start`, `entry` and doctor's token-mode Claude sign-in checks against a temporary home and a fake `/proc`, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
 | `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
@@ -561,6 +573,11 @@ when herdr is bumped past the version it was tested with.
 - **Nothing happens in bash / all commands print nothing inside the sandbox.**
   Something added a shell-completion script to `/etc/sandbox-persistent.sh`.
   Remove it; devenv never does.
+- **Claude says "Not logged in · Please run /login" in a background session
+  or the first mate.** `devenv doctor` fails with "a stored claude.ai login"
+  or "Claude's daemon has no CLAUDE_CODE_OAUTH_TOKEN". Run `devenv start`
+  (it moves the login aside), then `claude daemon stop --any` (this ends
+  background sessions) and start Claude again.
 - **Claude asks to `/login` or gets HTTP 401.** Run `devenv doctor` inside the
   sandbox. `CLAUDE_CODE_OAUTH_TOKEN is not set` means the custom secret didn't
   reach it: check the `devenv host-prepare` output of `sbx env run`, then

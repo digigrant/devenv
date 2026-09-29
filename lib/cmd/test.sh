@@ -8,6 +8,8 @@
 #      (spec §6.15)
 #   3. tests/tailscale.sh: tailscale-setup and doctor's Tailscale checks
 #      against fake apt, systemd, Tailscale and Windows (spec §6.14)
+#      and tests/claude-auth.sh: devenv start, entry and doctor's token-mode
+#      Claude sign-in checks against a temporary HOME and a fake /proc (V1)
 #   4. shellcheck on every script (installed shellcheck, or the pinned image)
 #   5. tests/container-smoke.sh for ubuntu:24.04 and ubuntu:26.04: provision.sh
 #      --plain in a throwaway container, versions (gh from GitHub's apt
@@ -71,6 +73,10 @@ cmd_test() {
   echo "== tailscale (fakes)"
   if bash "$DEVENV_ROOT/tests/tailscale.sh"; then results+=("PASS tailscale")
   else results+=("FAIL tailscale"); rc=1; fi
+
+  echo "== claude sign-in (fakes)"
+  if bash "$DEVENV_ROOT/tests/claude-auth.sh"; then results+=("PASS claude sign-in")
+  else results+=("FAIL claude sign-in"); rc=1; fi
 
   if [ "$lint" = 1 ]; then
     echo "== shellcheck"

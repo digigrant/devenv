@@ -181,12 +181,38 @@ placeholder, swapped for `api.anthropic.com`) passed in a throwaway sandbox:
 `authMethod: oauth_token`, `claude -p` answered, and `quota-axi` read the
 subscription's windows. devenv now does that (`CLAUDE_AUTH=token`).
 
+**Masking (2026-09-29).** `authMethod: oauth_token` and a `claude -p` answer
+only show that Claude *chose* the variable. If the host holds a global
+`anthropic` OAuth secret (`sbx secret ls` says `(oauth configured)`), the
+proxy signs **every** request to `api.anthropic.com` with it, even one with no
+credential, so the setup-token may never be used and this check passes
+anyway. That OAuth also makes sbx's `claude` kit seed a stored login, and
+Claude's daemon drops `CLAUDE_CODE_OAUTH_TOKEN` while one exists (background
+sessions, including the first mate's, then say "Not logged in"). The checks
+below fail under either condition.
+
 Check it in `dev` **(in sandbox)**:
 ```sh
 echo "mode=$SBX_CRED_ANTHROPIC_MODE var=${CLAUDE_CODE_OAUTH_TOKEN:0:7}"   # mode=none var=sbx-cs-
 claude auth status | head -n 4                    # "loggedIn": true, "authMethod": "oauth_token"
 claude -p "reply with the single word ok" < /dev/null   # ok
-devenv doctor | sed -n '/^accounts/,/^herdr/p'    # all ok
+# Masking: a request with no credential must NOT be answered. 200 means the
+# proxy injects sbx's OAuth login, so V1 FAILS (see the host fix below).
+curl -s -o /dev/null -w '%{http_code}\n' -H 'anthropic-beta: oauth-2025-04-20' https://api.anthropic.com/api/oauth/profile   # 401 (not 200)
+# No stored login, and a running daemon keeps the variable:
+jq -e '.claudeAiOauth.refreshToken' ~/.claude/.credentials.json >/dev/null 2>&1 && echo "STORED LOGIN" || echo none   # none
+for p in $(pgrep -f 'daemon run'); do tr '\0' '\n' < /proc/$p/environ | grep -c '^CLAUDE_CODE_OAUTH_TOKEN=' ; done   # 1 per daemon
+devenv doctor | sed -n '/^accounts/,/^herdr/p'    # all ok, including the two token-mode lines
+```
+
+If the profile request returns 200, V1 **fails**: the setup-token is not what
+signs requests. On the host, remove the global OAuth secret, then recreate
+`dev` (`sbx env rm`, `sbx env run`) and check again. This also signs
+`claude-dev` and any other sandbox out of that subscription login, so it is
+the owner's call:
+```sh
+sbx secret ls                                       # find: anthropic (oauth configured)
+sbx secret rm anthropic -f                          # global; without --sandbox it acts on global secrets
 ```
 
 Also after `sbx stop dev` + `sbx env run` (V10) and after a recreate (V6):
@@ -553,10 +579,14 @@ Results, from the owner on 2026-09-27 (SECRETS.md §5):
    gh api user --jq .login                           # gej-machine
    claude auth status | head -n 4                    # "authMethod": "oauth_token"
    claude -p "reply with the single word ok" < /dev/null   # ok
+   curl -s -o /dev/null -w '%{http_code}\n' -H 'anthropic-beta: oauth-2025-04-20' https://api.anthropic.com/api/oauth/profile   # 401
    ```
    Expected: sbx placeholders (`gho_sbxp…` or similar for GitHub,
    `sbx-cs-d…` for Claude), never a real `ghp_` or `sk-ant-oat01-` value;
-   `gej-machine`; `oauth_token`; `ok`.
+   `gej-machine`; `oauth_token`; `ok`; and **401** from the last command. A
+   200 means the proxy injects sbx's OAuth login and masks the setup-token:
+   A1 fails (see V1). `devenv doctor` must also show no stored login and a
+   daemon with the variable.
 
 8. **A locked keyring, without a restart** (the pop-up and the never-prompt
    rule). Lock the default keyring, then fetch:
@@ -636,7 +666,7 @@ Expected: `exit=1` for both.
 
 | Item | Where | Expected |
 |---|---|---|
-| A1 | 8.3 step 7 | placeholders only; `gej-machine`; `oauth_token` |
+| A1 | 8.3 step 7 | placeholders only; `gej-machine`; `oauth_token`; unauthenticated profile request is 401, not 200 |
 | A2 | 8.4 | `(end)` after each name |
 | A3 | 8.4 | the rebuild works with no secret files |
 | A4 | 8.5 | one keyring prompt after a restart; fetches still work after an hour |

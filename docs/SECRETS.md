@@ -42,7 +42,7 @@ Hiding a value doesn't stop misuse. sbx attaches the GitHub token to every reque
 - **`sbxenv.yaml` `secrets.<service>.command` is stored the same way:** the running `dev` sandbox records `github` as `{type: command, source: cat "$HOME/.config/devenv/secrets/github", refresh: 55m}`.
 - **Command sources run from a temporary directory on the host** (SPEC §2.2), so they need absolute paths. sbx's own note: "Put any required environment variables directly in the command or wrapper script."
 - **The daemon can probably reach the keyring.** sandboxd (`sbx daemon start`) has `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR` and `WSL_INTEROP` in its environment, so a command it runs should reach the Secret Service. Probe P3 confirms this.
-- **The global `anthropic` secret is OAuth, not a value.** sbx lists it as `(oauth configured)`, from the older `claude-dev` setup. Global secrets also reach `dev`. It is out of scope (§4 S11).
+- **The global `anthropic` secret is OAuth, not a value.** sbx lists it as `(oauth configured)`, from the older `claude-dev` setup. Global secrets also reach `dev`, and this one masks the setup-token (§11). Removing it is the owner's host action, not devenv's (§4 S11).
 
 **Infisical**
 - **The CLI's own login offers weak protection when logged in as a user:**
@@ -80,7 +80,7 @@ Hiding a value doesn't stop misuse. sbx attaches the GitHub token to every reque
 | S8 | **Claude:** unchanged mechanism (SPEC D8). The setup-token stays the `CLAUDE_CODE_OAUTH_TOKEN` custom secret for `api.anthropic.com`, set by `host-prepare`. Only its command changes, from `cat <file>` to `devenv secret-get CLAUDE_CODE_OAUTH_TOKEN`. |
 | S9 | **GitHub:** unchanged identity (SPEC D9). `sbxenv.yaml`'s `github` command becomes `devenv secret-get GITHUB_GEJ_MACHINE_PAT`. **As built (2026-09-28, owner's decision):** `sbxenv.yaml` has no `secrets:` block any more, because it can't read `devenv.conf`'s refresh settings (it expands only `${{ env.* }}` references). `host-prepare` sets the sandbox's `github` service secret itself: `sbx secret set github --sandbox dev --command '<absolute devenv> secret-get GITHUB_GEJ_MACHINE_PAT' --refresh <SECRET_REFRESH_GITHUB or SECRET_REFRESH>`, on every `sbx env run`. `sbxenv.yaml` keeps `bindings.github`, which approves the proxy using it. `sbx env rm` still deletes it with the sandbox's scope. |
 | S10 | **Typesafe:** stored in the project now, **not wired**, because Firstmate's typesafe dispatch stays out of scope (SPEC §1). Wiring it later takes a `host-prepare` custom secret (`TYPESAFE_API_KEY` for `api.typesafe.ai`) and a network allowance for that host. |
-| S11 | **Scope: the devenv `dev` sandbox only,** with sandbox-scoped secrets as today. Don't touch `claude-dev`, other sandboxes, global secrets (including the global `anthropic` OAuth) or global sbx settings (including SSH agent forwarding). |
+| S11 | **Scope: the devenv `dev` sandbox only,** with sandbox-scoped secrets as today. devenv never touches `claude-dev`, other sandboxes, global secrets (including the global `anthropic` OAuth) or global sbx settings (including SSH agent forwarding). **Added 2026-09-29:** that global OAuth reaches `dev`, makes the proxy override the setup-token and seeds a stored login that breaks Claude's daemon (§11). devenv handles the sandbox side (it moves the seeded login aside); whether to remove the global secret with `sbx secret rm anthropic` is the owner's call on the host, since it also signs `claude-dev` out. |
 | S12 | **Network policy unchanged.** Infisical's docs (`infisical.com`) stay reachable from `dev`; the sandbox never needs Infisical's API. |
 | S13 | **Cleanup, once the new path works on a host:** delete `~/.config/devenv/secrets/`; revoke the old `gej-machine` PAT; delete `~/.infisical/secrets-backup/` and run `infisical logout`. The owner manages secrets on the website. |
 | S14 | **The owner does by hand:** the Infisical website steps, replacing both tokens (a new `claude setup-token` and a new `gej-machine` PAT, `repo` scope, 90 days), and a ruleset on `digigrant/firstmate`'s `main` like the one on `devenv`. |
@@ -248,7 +248,7 @@ secrets:
 
 ## 9. Acceptance (commands in HOST-VERIFY §8.3)
 
-- **A1 — the sandbox holds only placeholders.** In `dev`, `GH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are sbx placeholders. `gh api user` answers `gej-machine`, and Claude answers with `authMethod: oauth_token`.
+- **A1 — the sandbox holds only placeholders.** In `dev`, `GH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are sbx placeholders. `gh api user` answers `gej-machine`, and Claude answers with `authMethod: oauth_token`. Neither is enough alone, because the proxy may be signing requests with sbx's OAuth login instead: a request to `api.anthropic.com/api/oauth/profile` with no credential must not return 200, there is no stored claude.ai login, and any running Claude daemon has `CLAUDE_CODE_OAUTH_TOKEN` (`devenv doctor` checks the last two).
 - **A2 — no plain-text copy.** After S13, neither live value appears in any file under `~/.config`, `~/.local`, `~/.cache`, `~/.infisical`, `~/devenv` or `/tmp`. The check reads each value into `grep -F -f -` on stdin, so the value never appears in a command.
 - **A3 — rebuilds need only the keyring.** With no secret files present, `sbx env rm` followed by `sbx env run` builds a working `dev`.
 - **A4 — reboots and refreshes work.** After a WSL restart, `sbx env run` asks once for the keyring password and then works. Fetches still succeed more than an hour later, past the 55-minute refresh.
@@ -270,7 +270,7 @@ secrets:
   - create repos under `gej-machine`, which the classic `repo` scope allows, and push code there;
   - send data to any of the ~190 hosts the network policy allows.
 - **The keyring is only as safe as the host.** Anything running as the owner on an unlocked host can read it, as with any OS secret store. The keyring protects against copies of the disk, backups and other users.
-- **Global sbx secrets still reach `dev`,** for example the global `anthropic` OAuth. They are outside this design (S11).
+- **Global sbx secrets still reach `dev`,** for example the global `anthropic` OAuth. They are outside this design (S11), but they defeat it: the proxy injects that OAuth credential on every request to `api.anthropic.com`, even one with no credential or a bogus placeholder, so the setup-token can't be observed working, and sbx's `claude` kit seeds a stored login from it. devenv moves the seeded login aside (`devenv start` and `entry`), and A1 detects the masking; removing the global secret is the owner's host action (HOST-VERIFY V1).
 
 ## 12. Later (not now)
 

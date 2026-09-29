@@ -113,7 +113,7 @@ re-run with the new one.
 
 | Item | Status |
 |---|---|
-| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself, including "still signed in after a second `sbx env run`" (the placeholder must stay stable; host-prepare now reuses the one sbx holds, HOST-VERIFY §8.3). |
+| V1 | Resolved with the custom secret (probe passed on the host). Still to confirm in `dev` itself, including "still signed in after a second `sbx env run`" (the placeholder must stay stable; host-prepare now reuses the one sbx holds, HOST-VERIFY §8.3). **Reopened 2026-09-29:** after a rebuild the first mate said "Not logged in": sbx's `claude` kit seeded a stored login, and Claude's daemon then drops the token. `devenv start`/`entry` now move it aside and doctor checks it; the old V1 check also passed while the host's global `anthropic` OAuth masked the setup-token, so it now includes an unauthenticated-request probe (expect 401). Removing that global secret is the owner's host action. |
 | V2 | Plan accepted `agent: devenv`; `extends: claude` resolved (claude template image, inherited credential). Detach/re-attach and herdr-server survival still to check on the host. In the sandbox, a second `devenv entry` re-attached with one `firstmate` workspace (AC3). |
 | V3, V8, V9 | Done in the sandbox (see decisions). |
 | V4 | Changed: skills are linked (see decisions). The sbx simulation checks the links; the host check is HOST-VERIFY V4 and AC7. |
