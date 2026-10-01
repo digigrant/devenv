@@ -54,7 +54,7 @@ _repo_url_norm() { local u=${1%/}; printf '%s' "${u%.git}"; }
 
 check_firstmate_origin() {
   local origin
-  [ -d "$FM_HOME/.git" ] || return
+  [ -d "$FM_HOME/.git" ] || return 0
   origin=$(git -C "$FM_HOME" remote get-url origin 2>/dev/null) || { _check_warn "firstmate clone has no origin remote"; return; }
   if [ "$(_repo_url_norm "$origin")" != "$(_repo_url_norm "$FIRSTMATE_REPO")" ]; then
     _check_warn "firstmate origin is $origin, devenv.conf says $FIRSTMATE_REPO — run: git -C \"\$FM_HOME\" remote set-url origin $FIRSTMATE_REPO"
@@ -153,7 +153,7 @@ check_anthropic_token() {
 
 check_firstmate_config() {
   local f name
-  [ -d "$FM_HOME" ] || return
+  [ -d "$FM_HOME" ] || return 0
   for f in "$DEVENV_ROOT"/firstmate/config/*; do
     [ -f "$f" ] || continue
     name=${f##*/}
@@ -178,6 +178,7 @@ cmd_check() {
   check_github_token
   check_anthropic_token
   check_firstmate_config
+  check_magic_conch_hub
   cache="$DEVENV_CACHE/warnings"
   mkdir -p "$DEVENV_CACHE"
   tmp=$(mktemp "$cache.XXXXXX")

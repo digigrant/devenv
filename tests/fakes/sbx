@@ -9,7 +9,9 @@
 # `secret set` (a service secret) just succeeds, as sbx does after running the
 # command once. FAKE_SBX_LS replaces the `secret ls` output; FAKE_SBX_FAIL=ls
 # or FAKE_SBX_FAIL=set makes that subcommand fail. `policy check network`
-# answers FAKE_SBX_POLICY (allowed, or denied by default) for tests/emulator.sh.
+# answers FAKE_SBX_POLICY (allowed, or denied by default) for tests/emulator.sh;
+# when FAKE_SBX_POLICY_ALLOW is set (tests/hub.sh), exactly the targets it
+# lists (space-separated, e.g. "localhost:8431") are allowed.
 set -euo pipefail
 printf 'sbx %s\n' "$*" >> "$FAKE_LOG/argv"
 store=$FAKE_LOG/sbx-placeholder
@@ -67,7 +69,11 @@ case "${1:-} ${2:-}" in
   "policy check")
     # FAKE_SBX_POLICY=allowed|denied (default denied): the answer for any target.
     target=${*: -1}
-    if [ "${FAKE_SBX_POLICY:-denied}" = allowed ]; then
+    verdict=${FAKE_SBX_POLICY:-denied}
+    if [ -n "${FAKE_SBX_POLICY_ALLOW+x}" ]; then
+      case " $FAKE_SBX_POLICY_ALLOW " in *" $target "*) verdict=allowed ;; *) verdict=denied ;; esac
+    fi
+    if [ "$verdict" = allowed ]; then
       printf 'Allowed: %s\nGovernance: Local policy only\n' "$target"
     else
       printf 'Denied: %s\nGovernance: Local policy only\nReason: no matching allow rule\n' "$target"

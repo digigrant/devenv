@@ -9,6 +9,7 @@
 #   devenv bump …              update versions.env in a writable checkout (see: devenv bump --help)
 #   devenv test                provision.sh in throwaway containers, status line identity, shellcheck
 #   devenv emulator connect|run|status   use the host's Android emulator (see: devenv emulator --help)
+#   devenv hub status          whether the host's Magic Conch hub answers
 # On the host:
 #   devenv doctor              host prerequisites and the operating rules
 #   devenv host-prepare        sbx lifecycle.initialize hook (doctor-lite, keyring, Claude sign-in)
@@ -16,22 +17,25 @@
 #   devenv secret-get NAME     print one secret from Infisical (what sbx runs)
 #   devenv tailscale-setup     install Tailscale and sign this machine in (interactive, once)
 #   devenv emulator start|stop|status|clean   the opt-in Android emulator (a container with /dev/kvm)
+#   devenv hub start|stop|status|admin|clean  the Magic Conch hub (a container; see: devenv hub --help)
 set -euo pipefail
 
 DEVENV_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$DEVENV_ROOT/lib/common.sh"
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case "$cmd" in
-  start|entry|check|doctor|bump|test|host-prepare|secrets-init|secret-get|tailscale-setup|emulator)
+  start|entry|check|doctor|bump|test|host-prepare|secrets-init|secret-get|tailscale-setup|emulator|hub)
     # shellcheck source=../lib/tools.sh
     . "$DEVENV_ROOT/lib/tools.sh"
     # shellcheck source=../lib/android.sh
     . "$DEVENV_ROOT/lib/android.sh"
+    # shellcheck source=../lib/magic-conch.sh
+    . "$DEVENV_ROOT/lib/magic-conch.sh"
     # shellcheck source=../lib/claude.sh
     . "$DEVENV_ROOT/lib/claude.sh"
     # shellcheck source=../lib/herdr.sh
@@ -62,6 +66,8 @@ case "$cmd" in
     . "$DEVENV_ROOT/lib/cmd/tailscale-setup.sh"
     # shellcheck source=../lib/cmd/emulator.sh
     . "$DEVENV_ROOT/lib/cmd/emulator.sh"
+    # shellcheck source=../lib/cmd/hub.sh
+    . "$DEVENV_ROOT/lib/cmd/hub.sh"
     load_config
     "cmd_${cmd//-/_}" "$@"
     ;;

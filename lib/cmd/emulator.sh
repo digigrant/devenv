@@ -43,24 +43,7 @@ emu_settings_problems() {
 }
 
 # Why Docker can't run the emulator here, one line with the fix; nothing when it can.
-emu_docker_problem() {
-  local out
-  if ! have docker; then
-    echo "docker is not installed. Install Docker Engine from Docker's apt repository (set up for sbx): sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin; sudo usermod -aG docker \$USER, then log in again"
-    return 0
-  fi
-  if ! out=$(docker info --format '{{.OperatingSystem}}' 2>&1 </dev/null); then
-    case "$out" in
-      *"permission denied"*) echo "docker: permission denied on the Docker socket; run: sudo usermod -aG docker \$USER, then log in again" ;;
-      *) echo "the Docker daemon doesn't answer ($(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)); start it: sudo systemctl start docker (without systemd: sudo service docker start)" ;;
-    esac
-    return 0
-  fi
-  case "$out" in
-    *"Docker Desktop"*) echo "docker talks to Docker Desktop, whose containers get no /dev/kvm; install Docker Engine in this Linux instead (README: Android emulator)" ;;
-  esac
-  return 0
-}
+emu_docker_problem() { docker_engine_problem "whose containers get no /dev/kvm" "Android emulator"; }
 
 emu_kvm_problem() {
   [ -e "$(emu_kvm)" ] || echo "$(emu_kvm) is missing: this machine has no KVM (turn on virtualization in the firmware settings; under WSL, nested virtualization)"
@@ -186,19 +169,7 @@ emu_wait_boot() {
 
 # allowed or denied: whether the host's network policy lets sandbox dev reach
 # localhost:<port> (sbx policy check); nothing when sbx can't say.
-emu_policy_state() {
-  local out args
-  have sbx || return 0
-  for args in "--sandbox $CONF_SANDBOX_NAME" ''; do
-    # shellcheck disable=SC2086 # $args is empty or two words
-    out=$(sbx policy check network $args "localhost:$ANDROID_EMULATOR_PORT" 2>&1 </dev/null || true)
-    case "$(printf '%s\n' "$out" | head -n 1)" in
-      [Aa]llowed*) echo allowed; return 0 ;;
-      [Dd]enied*) echo denied; return 0 ;;
-    esac
-  done
-  return 0
-}
+emu_policy_state() { sbx_policy_state "$ANDROID_EMULATOR_PORT"; }
 
 # One line per finding, for doctor and status: "ok: …", "warn: …", "fail: …"
 # or "info: …". The emulator is optional: what isn't set up is info, not a

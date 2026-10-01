@@ -1,12 +1,14 @@
 # shellcheck shell=bash
-# devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image]
+# devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image] [--hub-image]
 # (spec §6.13, AC5, AC12):
 #   1. tests/statusline-identity.sh
 #   2. tests/secrets.sh: secret-get, doctor and host-prepare against a fake
 #      keyring, Infisical, GitHub and sbx (docs/SECRETS.md §6.9); and
 #      tests/emulator.sh: devenv emulator against a fake docker, adb and sbx
 #      (spec §6.15); and tests/android-toolchain.sh: provision's installers
-#      for adb, the JDK and the SDK packages against dummy downloads
+#      for adb, the JDK and the SDK packages against dummy downloads; and
+#      tests/hub.sh: devenv hub, and doctor's and check's hub checks, against a
+#      fake docker, Tailscale, sbx, keyring and a stand-in hub (spec §6.16)
 #   3. tests/tailscale.sh: tailscale-setup and doctor's Tailscale checks
 #      against fake apt, systemd, Tailscale and Windows (spec §6.14)
 #      and tests/claude-auth.sh: devenv start, entry and doctor's token-mode
@@ -24,7 +26,9 @@
 #      step against a real gnome-keyring in an ubuntu:26.04 container.
 # --no-containers runs only 1 to 4. --emulator-image adds
 # tests/emulator-image.sh: the emulator's real image and SDK volume (downloads
-# about 2.2 GB, needs about 6 GB of Docker disk).
+# about 2.2 GB, needs about 6 GB of Docker disk). --hub-image adds
+# tests/hub-image.sh: the Magic Conch hub's real image and Whisper model
+# (downloads about 1.6 GB), and a pairing and a transcription against it.
 
 DEVENV_TEST_IMAGES=(ubuntu:24.04 ubuntu:26.04)
 
@@ -48,14 +52,15 @@ run_shellcheck() {
 }
 
 cmd_test() {
-  local images=() containers=1 lint=1 emulator_image=0 rc=0 img results=()
+  local images=() containers=1 lint=1 emulator_image=0 hub_image=0 rc=0 img results=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --image) images+=("${2:?--image needs a value}"); shift 2 ;;
       --no-containers) containers=0; shift ;;
       --no-shellcheck) lint=0; shift ;;
       --emulator-image) emulator_image=1; shift ;;
-      *) die "usage: devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image]" ;;
+      --hub-image) hub_image=1; shift ;;
+      *) die "usage: devenv test [--image IMG]... [--no-containers] [--no-shellcheck] [--emulator-image] [--hub-image]" ;;
     esac
   done
   [ ${#images[@]} -gt 0 ] || images=("${DEVENV_TEST_IMAGES[@]}")
@@ -71,6 +76,10 @@ cmd_test() {
   echo "== emulator (fakes)"
   if bash "$DEVENV_ROOT/tests/emulator.sh"; then results+=("PASS emulator")
   else results+=("FAIL emulator"); rc=1; fi
+
+  echo "== Magic Conch hub (fakes)"
+  if bash "$DEVENV_ROOT/tests/hub.sh"; then results+=("PASS hub")
+  else results+=("FAIL hub"); rc=1; fi
 
   echo "== android toolchain (fakes)"
   if bash "$DEVENV_ROOT/tests/android-toolchain.sh"; then results+=("PASS android toolchain")
@@ -108,6 +117,12 @@ cmd_test() {
     echo "== emulator image (real)"
     if bash "$DEVENV_ROOT/tests/emulator-image.sh"; then results+=("PASS emulator image")
     else results+=("FAIL emulator image"); rc=1; fi
+  fi
+  if [ "$hub_image" = 1 ]; then
+    have docker || die "docker is required for --hub-image"
+    echo "== Magic Conch hub image (real)"
+    if bash "$DEVENV_ROOT/tests/hub-image.sh"; then results+=("PASS hub image")
+    else results+=("FAIL hub image"); rc=1; fi
   fi
 
   echo

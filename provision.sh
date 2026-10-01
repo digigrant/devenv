@@ -20,6 +20,8 @@ DEVENV_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 . "$DEVENV_ROOT/lib/tools.sh"
 # shellcheck source=lib/android.sh
 . "$DEVENV_ROOT/lib/android.sh"
+# shellcheck source=lib/magic-conch.sh
+. "$DEVENV_ROOT/lib/magic-conch.sh"
 # shellcheck source=lib/claude.sh
 . "$DEVENV_ROOT/lib/claude.sh"
 # shellcheck source=lib/herdr.sh

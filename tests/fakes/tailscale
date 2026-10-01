@@ -9,6 +9,13 @@
 #   FAKE_TS_KEY_EXPIRY    an RFC 3339 time, "none" for expiry disabled;
 #                         default 150 days from now
 #   FAKE_TS_UP_FAIL=1     `up` fails
+#   FAKE_TS_LOGIN         the login of the user the machine is signed in as
+#                         (default owner@example.com)
+#   FAKE_TS_TAGGED=1      the machine is a tagged device (no owner login)
+# `serve status --json` prints $FAKE_LOG/ts-serve.json (else {}); `serve --bg
+# --https=P http://127.0.0.1:P` writes it and `serve --https=P off` empties
+# it, as tailscale's own serve configuration.
+#   FAKE_TS_SERVE_FAIL=1  `serve --bg` fails
 set -euo pipefail
 printf 'tailscale %s\n' "$*" >> "$FAKE_LOG/argv"
 state=$(cat "$FAKE_LOG/ts-state" 2>/dev/null || echo "${FAKE_TS_STATE:-NeedsLogin}")
@@ -22,9 +29,12 @@ case "$*" in
     exp=${FAKE_TS_KEY_EXPIRY:-$(date -u -d '+150 days' +%Y-%m-%dT%H:%M:%SZ)}
     [ "$exp" != none ] || exp=''
     jq -n --arg state "$state" --arg url "${FAKE_TS_AUTH_URL:-}" --arg exp "$exp" \
-      --argjson magic "${FAKE_TS_MAGICDNS:-true}" --arg https "${FAKE_TS_HTTPS:-1}" '
+      --argjson magic "${FAKE_TS_MAGICDNS:-true}" --arg https "${FAKE_TS_HTTPS:-1}" \
+      --arg login "${FAKE_TS_LOGIN:-owner@example.com}" --arg tagged "${FAKE_TS_TAGGED:-}" '
       {Version: "1.90.6", BackendState: $state, AuthURL: $url, TailscaleIPs: [],
-       Self: {HostName: "devhost", DNSName: "", Online: false}, CurrentTailnet: null, CertDomains: null}
+       Self: {HostName: "devhost", DNSName: "", Online: false, UserID: 12345}, CurrentTailnet: null, CertDomains: null,
+       User: {"12345": {ID: 12345, LoginName: $login, DisplayName: "Owner"}}}
+      | if $tagged == "1" then .Self.Tags = ["tag:server"] | .Self.UserID = 999 | .User = {"999": {ID: 999, LoginName: "tagged-devices"}} else . end
       | if $state == "Running" then
           .TailscaleIPs = ["100.101.102.103", "fd7a:115c:a1e0::1"]
           | .Self.DNSName = "devhost.tail1234.ts.net." | .Self.Online = true
@@ -39,5 +49,13 @@ case "$*" in
     echo Running > "$FAKE_LOG/ts-state"
     echo "Success."
     ;;
+  "serve status --json") cat "$FAKE_LOG/ts-serve.json" 2>/dev/null || echo '{}' ;;
+  "serve --bg --https="*" http://127.0.0.1:"*)
+    [ -z "${FAKE_TS_SERVE_FAIL:-}" ] || { echo "error: fake serve failure" >&2; exit 1; }
+    p=${3#--https=}
+    jq -n --arg p "$p" --arg t "$4" '{TCP: {($p): {HTTPS: true}}, Web: {("devhost.tail1234.ts.net:" + $p): {Handlers: {"/": {Proxy: $t}}}}}' > "$FAKE_LOG/ts-serve.json"
+    echo "Available within your tailnet: https://devhost.tail1234.ts.net:$p/"
+    ;;
+  "serve --https="*" off") echo '{}' > "$FAKE_LOG/ts-serve.json" ;;
   *) echo "fake tailscale: unexpected call" >&2; exit 2 ;;
 esac

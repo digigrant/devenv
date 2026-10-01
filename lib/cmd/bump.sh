@@ -16,11 +16,15 @@
 #   devenv bump [--repo PATH] android-emulator <build|latest>
 #   devenv bump [--repo PATH] android-system-image <api> [tag]
 #   devenv bump [--repo PATH] android-base-image [image:tag]
+#   devenv bump [--repo PATH] magic-conch <commit|latest>
+#   devenv bump [--repo PATH] magic-conch-base-image [image:tag]
+#   devenv bump [--repo PATH] uv-image <version|latest>
+#   devenv bump [--repo PATH] whisper-model [huggingface-repo] [revision|latest]
 #   devenv bump --list          pinned vs latest, read-only
 
 HERDR_MANIFEST_PATH=distribution/agent-detection/claude.toml
 
-bump_usage() { sed -n '5,20p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
+bump_usage() { sed -n '5,24p' "$DEVENV_ROOT/lib/cmd/bump.sh" | sed 's/^# \{0,1\}//'; }
 
 # GitHub REST call: gh when it works, anonymous curl otherwise.
 gh_api() {
@@ -266,13 +270,72 @@ bump_android_system_image() {
   set_pin ANDROID_SYSTEM_IMAGE_ZIP "$zip"
 }
 
-bump_android_base_image() {
-  local ref=${1:-} digest
-  [ -n "$ref" ] || ref=$(sed -n 's/^ANDROID_EMULATOR_BASE_IMAGE=//p' "$BUMP_FILE" | sed 's/@.*//')
+# bump_image_digest KEY [image:tag]: pin KEY to the image's current digest
+# (the tag it names now, by default).
+bump_image_digest() {
+  local key=$1 ref=${2:-} digest
+  [ -n "$ref" ] || ref=$(sed -n "s/^$key=//p" "$BUMP_FILE" | sed 's/@.*//')
   have docker || die "resolving $ref's digest needs docker (docker buildx imagetools inspect)"
   digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r '.digest // empty') \
     && [ -n "$digest" ] || die "cannot resolve the digest of $ref"
-  set_pin ANDROID_EMULATOR_BASE_IMAGE "${ref%@*}@$digest"
+  set_pin "$key" "${ref%@*}@$digest"
+}
+
+bump_android_base_image() { bump_image_digest ANDROID_EMULATOR_BASE_IMAGE "$@"; }
+
+# The Magic Conch hub's source: a commit of the private MAGIC_CONCH_REPO and
+# the sha256 of GitHub's tarball of it (gh, or curl through a sandbox's
+# proxy, which adds the gej-machine token).
+bump_magic_conch() {
+  local ref=${1:-latest} repo sha tmp
+  repo=$(sed -n 's/^MAGIC_CONCH_REPO=//p' "$BUMP_FILE")
+  [ "$ref" != latest ] || ref=main
+  sha=$(gh_api "repos/$repo/commits/$ref" | jq -r '.sha // empty') || true
+  [ -n "$sha" ] || die "cannot resolve $repo at $ref"
+  tmp=$(mktemp)
+  log "downloading GitHub's tarball of $repo at ${sha:0:12} to compute its sha256"
+  if ! { have gh && gh api "repos/$repo/tarball/$sha" > "$tmp" 2>/dev/null; } \
+     && ! curl -fsSL -m 120 -o "$tmp" "https://api.github.com/repos/$repo/tarball/$sha"; then
+    rm -f "$tmp"; die "cannot download $repo at $sha"
+  fi
+  tar -tzf "$tmp" | grep -q '^[^/]*/hub/uv\.lock$' || { rm -f "$tmp"; die "$repo at ${sha:0:12} has no hub/uv.lock"; }
+  set_pin MAGIC_CONCH_COMMIT "$sha"
+  set_pin MAGIC_CONCH_SHA256 "$(file_sha256 "$tmp")"
+  rm -f "$tmp"
+  log "check that the hub's uv.lock still suits MAGIC_CONCH_BASE_IMAGE's Python (its .python-version), then devenv test --hub-image"
+}
+
+bump_uv_image() {
+  local ver=${1:-latest}
+  [ "$ver" != latest ] || ver=$(gh_api repos/astral-sh/uv/releases/latest | jq -r '.tag_name // empty')
+  [ -n "$ver" ] || die "cannot find uv's latest release"
+  bump_image_digest MAGIC_CONCH_UV_IMAGE "ghcr.io/astral-sh/uv:$ver"
+}
+
+# The Whisper model: a revision of a faster-whisper conversion on Hugging
+# Face, and the sha256 of each file faster-whisper loads (an LFS file's comes
+# from Hugging Face's API; the small files are downloaded and hashed).
+bump_whisper_model() {
+  local repo=${1:-} rev=${2:-latest} json files='' f sha tmp
+  [ -n "$repo" ] || repo=$(sed -n 's/^MAGIC_CONCH_WHISPER_REPO=//p' "$BUMP_FILE")
+  [ "$rev" != latest ] || rev=main
+  json=$(curl -fsSL -m 30 "$HF_URL/api/models/$repo/revision/$rev?blobs=true") || die "Hugging Face has no $repo at $rev"
+  rev=$(printf '%s' "$json" | jq -r '.sha // empty')
+  [ -n "$rev" ] || die "cannot resolve $repo's revision"
+  while IFS=$'\t' read -r f sha; do
+    if [ -z "$sha" ]; then
+      tmp=$(mktemp)
+      curl -fsSL --retry 3 -o "$tmp" "$HF_URL/$repo/resolve/$rev/$f" || { rm -f "$tmp"; die "cannot download $f"; }
+      sha=$(file_sha256 "$tmp"); rm -f "$tmp"
+    fi
+    files+="$f:$sha "
+  done < <(printf '%s' "$json" | jq -r '.siblings[]
+    | select(.rfilename | test("^(config\\.json|preprocessor_config\\.json|model\\.bin|tokenizer\\.json|vocabulary\\..*)$"))
+    | [.rfilename, (.lfs.sha256 // "")] | @tsv')
+  case " $files" in *" model.bin:"*) ;; *) die "$repo has no model.bin: is it a faster-whisper (CTranslate2) conversion?" ;; esac
+  set_pin MAGIC_CONCH_WHISPER_REPO "$repo"
+  set_pin MAGIC_CONCH_WHISPER_REVISION "$rev"
+  set_pin MAGIC_CONCH_WHISPER_FILES "\"${files% }\""
 }
 
 bump_list() {
@@ -309,6 +372,13 @@ bump_list() {
     | awk -v p="system-images;android-$ANDROID_SYSTEM_IMAGE_API;$ANDROID_SYSTEM_IMAGE_TAG;x86_64" '$1 == p { print "r" $2; exit }')
   printf '%-22s %-14s %s  (other API levels: devenv bump android-system-image <api>)\n' android-system-image \
     "$ANDROID_SYSTEM_IMAGE_API r$ANDROID_SYSTEM_IMAGE_REVISION" "${latest:-?}"
+  latest=$(gh_api "repos/$MAGIC_CONCH_REPO/commits/main" 2>/dev/null | jq -r '.sha // "?"' | cut -c1-12)
+  printf '%-22s %-14s %s  (%s main)\n' magic-conch "${MAGIC_CONCH_COMMIT:0:12}" "${latest:-?}" "$MAGIC_CONCH_REPO"
+  latest=$(gh_api repos/astral-sh/uv/releases/latest 2>/dev/null | jq -r '.tag_name // "?"')
+  printf '%-22s %-14s %s\n' uv-image "$(v=${MAGIC_CONCH_UV_IMAGE%@*}; printf '%s' "${v##*:}")" "$latest"
+  latest=$(curl -fsSL -m 20 "$HF_URL/api/models/$MAGIC_CONCH_WHISPER_REPO/revision/main" 2>/dev/null | jq -r '.sha // "?"' | cut -c1-12)
+  printf '%-22s %-14s %s  (%s)\n' whisper-model "${MAGIC_CONCH_WHISPER_REVISION:0:12}" "${latest:-?}" "$MAGIC_CONCH_WHISPER_REPO"
+  printf '%-22s %-14s %s\n' magic-conch-base-image "${MAGIC_CONCH_BASE_IMAGE%@*}" "(devenv bump magic-conch-base-image refreshes its digest)"
   latest=$(git ls-remote "$FIRSTMATE_REPO" refs/heads/main 2>/dev/null | cut -c1-12)
   printf '%-22s %-14s %s  (%s; not pinned, updates automatically)\n' firstmate - "${latest:-?}" "${FIRSTMATE_REPO#https://github.com/}"
   if [ -n "${FIRSTMATE_UPSTREAM:-}" ]; then
@@ -355,6 +425,10 @@ cmd_bump() {
     android-emulator) bump_android_emulator "$@" ;;
     android-system-image) bump_android_system_image "$@" ;;
     android-base-image) bump_android_base_image "$@" ;;
+    magic-conch) bump_magic_conch "$@" ;;
+    magic-conch-base-image) bump_image_digest MAGIC_CONCH_BASE_IMAGE "$@" ;;
+    uv-image) bump_uv_image "$@" ;;
+    whisper-model) bump_whisper_model "$@" ;;
     *) rm -f "$BUMP_BACKUP"; bump_usage; die "unknown bump target: $what" ;;
   esac
   show_diff

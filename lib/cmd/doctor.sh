@@ -153,6 +153,9 @@ doctor_host() {
 
   echo "Android emulator (opt-in: devenv emulator start)"
   emu_print_report < <(emu_host_report) || true
+
+  echo "Magic Conch hub (devenv hub start)"
+  emu_print_report < <(hub_host_report) || true
   echo
   echo "Operating rule: $(operating_rule)"
 }
@@ -263,6 +266,9 @@ doctor_env() {
     done < <(android_toolchain_versions)
   fi
   emu_print_report < <(emu_env_report) || true
+
+  echo "Magic Conch hub (on the host)"
+  emu_print_report < <(mc_env_report) || true
 
   echo "devenv check"
   cmd_check

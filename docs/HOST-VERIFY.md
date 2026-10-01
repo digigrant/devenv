@@ -1090,3 +1090,165 @@ Conch app; this is the check in the real sandbox.
    `android/.tools` on the environment. Report whether it builds, and any
    message about a missing SDK package or licences not accepted (then say
    which package).
+
+## 13. Magic Conch hub (D36)
+
+`devenv hub` runs the Magic Conch hub on the host, in a Docker Engine
+container, with `tailscale serve` putting its phone listener on the tailnet
+and one network policy rule letting sandboxes reach its session listener
+(README: "Magic Conch hub"). The agent built and tested everything it could
+in a sandbox: the real image builds from the pinned source, the pinned
+Whisper model loads offline in the read-only container, and pairing, a
+session key and a transcription work against it (`tests/hub-image.sh`);
+Tailscale, sudo and sbx were fakes there. Nothing below has run on a host
+yet, and no real `tailscale` or `sbx` command has run. `devenv hub` is host
+code, so the host checkout must be on the branch while the PR is open:
+
+```sh
+git -C ~/devenv fetch origin
+git -C ~/devenv switch fm/devenv-hub-install
+```
+
+Run it on the desktop (WSL 2) first; the laptop later. Report which one.
+
+1. **Prerequisites.** Docker Engine (§11 step 1), Tailscale signed in with
+   MagicDNS and HTTPS certificates on (§10), and the keyring set up (§8; the
+   hub's source is a private repo, downloaded with the `gej-machine` token):
+   ```sh
+   docker info --format '{{.OperatingSystem}}' 2>&1 | tail -n 1
+   systemctl is-enabled docker
+   tailscale status --json | jq '{BackendState, name: .Self.DNSName, login: .User[(.Self.UserID|tostring)].LoginName, tags: .Self.Tags, CertDomains, magic: .CurrentTailnet.MagicDNSEnabled}'
+   tailscale serve status --json
+   ```
+   Expected: not `Docker Desktop`; `enabled` (otherwise
+   `sudo systemctl enable docker`, or the hub won't come back after a
+   reboot); `Running`, this machine's name, **your** login, no tags, the name
+   in `CertDomains`, `true`; and `{}` (or whatever you already serve: paste
+   it). Report if `tailscale serve status --json` needs sudo (devenv reads it
+   without root).
+
+2. **Doctor, before the first start:**
+   ```sh
+   ~/devenv/bin/devenv doctor | sed -n '/^Magic Conch hub/,/^Operating rule/p'
+   ```
+   Expected: the section header and nothing under it (nothing is set up, and
+   no policy rule lets sandboxes reach port 8430). A `FAIL … localhost:8430`
+   there means a rule (perhaps `**`) already exposes the phone port: paste
+   `sbx policy ls`.
+
+3. **First start** (downloads the Whisper model, 1.5 GB, and builds the
+   image; sudo asks for your password for `tailscale serve`):
+   ```sh
+   time ~/devenv/bin/devenv hub start
+   ```
+   Expected, in order: `the hub's source matches versions.env`, `hub image
+   devenv-magic-conch-hub:… built`, `Whisper model … matches versions.env`,
+   `made the hub's data folder …/.local/share/magic-conch-hub (owner-only)`,
+   `hub started (container devenv-magic-conch-hub, label <machine>, owner
+   <your login>)`, `the hub answers on 127.0.0.1:8430 (phones) and
+   127.0.0.1:8431 (sessions)`, the `sudo tailscale serve --bg --https=8430
+   http://127.0.0.1:8430` line and Tailscale's `Available within your
+   tailnet: https://<machine>.<tailnet>.ts.net:8430/`, `tailscale serve
+   publishes …`, then `warning: sandboxes can't reach the session listener:
+   allow it once with: sbx policy allow network localhost:8431` and `✓
+   sandboxes can't reach the phone listener`. Paste the output and the time.
+   If Tailscale prints a link to enable Serve for the tailnet, open it,
+   approve, and paste what happened. If the download of the source fails,
+   paste the line (and `~/devenv/bin/devenv doctor | sed -n '/^secrets/,/^devenv checkout/p'`).
+
+4. **The policy rule**, once (it covers every sandbox and survives rebuilds),
+   then the full report:
+   ```sh
+   sbx policy allow network localhost:8431
+   ~/devenv/bin/devenv hub status
+   ```
+   Expected: every line `ok`: image, model, data folder (owner-only), running
+   and healthy, both listeners, `tailscale serve publishes
+   https://<machine>.<tailnet>.ts.net:8430`, `… reaches the hub through
+   tailscale serve, and the hub accepts your login (<you>)`, the session
+   port allowed and the phone port denied. If the tailnet line is a `note …
+   didn't answer from this machine`, paste it: this machine reaching its own
+   `serve` is one thing only a host shows; then check from the phone (step 6).
+
+5. **What runs, and its cost:**
+   ```sh
+   docker inspect -f '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.RestartPolicy.Name}} {{.HostConfig.CapDrop}}' devenv-magic-conch-hub
+   docker port devenv-magic-conch-hub
+   stat -c '%a %U' ~/.local/share/magic-conch-hub
+   docker stats --no-stream devenv-magic-conch-hub --format '{{.MemUsage}} {{.CPUPerc}}'
+   docker image ls devenv-magic-conch-hub; du -sh ~/.local/share/devenv/whisper
+   ss -ltnp | grep -E ':(8430|8431) '
+   ```
+   Expected: `<your uid>:<gid> true unless-stopped [ALL]`; `8430/tcp ->
+   127.0.0.1:8430` and `8431/tcp -> 127.0.0.1:8431` only; `700 <you>`; the
+   memory (small while idle); about 0.75 GB of image and 1.5 GB of model;
+   both ports listening on `127.0.0.1` only. Paste it.
+
+6. **From the phone** (with Tailscale on the phone signed in as you): open
+   `https://<machine>.<tailnet>.ts.net:8430/v1/info` in its browser.
+   Expected: JSON with `"error": {"code": "unsupported_protocol_version"}`:
+   the browser sends no protocol header, so this proves the path (tailnet,
+   certificate, `tailscale serve`, the hub) and that the hub accepted your
+   login (a `not_owner` there would mean it didn't). Then, from the same
+   phone, Tailscale Funnel must not be involved: in a browser on a device
+   **off** the tailnet (mobile data with Tailscale off), the same URL must
+   not load at all.
+
+7. **Pairing and a session** (the app's network build pairs for real; until
+   then, check the tool):
+   ```sh
+   ~/devenv/bin/devenv hub admin pairing-code
+   ~/devenv/bin/devenv hub admin add-session firstmate Firstmate > /dev/null   # the key goes nowhere: this is a check
+   ~/devenv/bin/devenv hub admin default-session firstmate
+   ~/devenv/bin/devenv hub admin sessions
+   ```
+   Expected: the hub URL, a code, the pairing URI and a QR code;
+   `Session firstmate added…` on stderr; the session listed as the default.
+   For the real connector, run `add-session` (or `replace-session-key`) when
+   firstmate's connector is ready, and put the key where it says.
+   `revoke-session firstmate` removes this test one when you want.
+
+8. **(in sandbox)** The session listener, and the phone listener out of reach.
+   Until a merged PR reaches the sandbox's devenv clone, use the branch in a
+   temporary worktree:
+   ```sh
+   git -C ~/fm-projects/devenv fetch -q origin fm/devenv-hub-install
+   git -C ~/fm-projects/devenv worktree add -f /tmp/devenv-hub FETCH_HEAD
+   /tmp/devenv-hub/bin/devenv hub status
+   curl -sS -X POST -H 'Magic-Conch-Protocol: 1.0' http://host.docker.internal:8431/v1/session/hello; echo
+   curl -sS http://host.docker.internal:8430/v1/info | head -n 2
+   git -C ~/fm-projects/devenv worktree remove --force /tmp/devenv-hub
+   ```
+   Expected: `ok    the hub's session listener answers at
+   http://host.docker.internal:8431` and `ok    the hub's phone listener is
+   out of this sandbox's reach`; `{"error":{"code":"session_key_invalid",…}}`;
+   and the proxy's `Blocked by network policy: domain localhost:8430`.
+
+9. **Restart and reboot.**
+   ```sh
+   ~/devenv/bin/devenv hub stop && ~/devenv/bin/devenv hub start   # no rebuild, no download, no sudo
+   ~/devenv/bin/devenv hub admin sessions                          # firstmate is still there
+   ```
+   Then restart the machine (on WSL: `wsl.exe --shutdown` in PowerShell, and
+   open the distro again) and, without running devenv:
+   `docker ps --filter name=devenv-magic-conch-hub --format '{{.Status}}'`
+   and `tailscale serve status`. Expected: `Up … (healthy)` and the 8430
+   entry: both come back by themselves.
+
+10. **WSL only: an idle distro.** Close every WSL terminal, wait 5 minutes,
+    then from the phone open the step 6 URL again (or, from PowerShell,
+    `wsl.exe -l -v` to see whether the distro is still `Running`). Report
+    whether the hub still answered. If WSL stopped the distro, the hub and
+    tailscaled stopped with it; the fix (keeping the distro running) is for
+    the owner to choose, and devenv doesn't change Windows' settings.
+
+11. **The refusals** (optional): `sudo tailscale funnel --bg --https=8430
+    http://127.0.0.1:8430`, then `~/devenv/bin/devenv hub status` must FAIL
+    with `Tailscale Funnel is on for port 8430`; undo it at once with
+    `sudo tailscale funnel --https=8430 off` and run `devenv hub start` again
+    (it puts back the `serve` entry if Funnel's removal took it). Skip this
+    step if you'd rather not open the port to the internet even briefly.
+
+Keep the hub running afterwards; `~/devenv/bin/devenv hub clean` removes
+the image, model and `serve` entry (never `~/.local/share/magic-conch-hub`).
+Switch the checkout back to `main` once the PR is merged.

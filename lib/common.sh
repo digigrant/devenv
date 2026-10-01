@@ -77,6 +77,47 @@ deb_pkg_version() {
   dpkg-query -W -f='${Status}\t${Version}\n' "$1" 2>/dev/null | awk -F'\t' '$1 == "install ok installed" { print $2 }' || true
 }
 
+# ---------------------------------------------------------------- host services
+# docker_engine_problem WHY SECTION: why Docker Engine can't run devenv's host
+# containers (the emulator, the Magic Conch hub) here, one line with the fix;
+# nothing when it can. WHY says why Docker Desktop won't do, and SECTION is
+# the README section that says how to install Docker Engine.
+docker_engine_problem() {
+  local out
+  if ! have docker; then
+    echo "docker is not installed. Install Docker Engine from Docker's apt repository (set up for sbx): sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin; sudo usermod -aG docker \$USER, then log in again"
+    return 0
+  fi
+  if ! out=$(docker info --format '{{.OperatingSystem}}' 2>&1 </dev/null); then
+    case "$out" in
+      *"permission denied"*) echo "docker: permission denied on the Docker socket; run: sudo usermod -aG docker \$USER, then log in again" ;;
+      *) echo "the Docker daemon doesn't answer ($(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)); start it: sudo systemctl start docker (without systemd: sudo service docker start)" ;;
+    esac
+    return 0
+  fi
+  case "$out" in
+    *"Docker Desktop"*) echo "docker talks to Docker Desktop, $1; install Docker Engine in this Linux instead (README: $2)" ;;
+  esac
+  return 0
+}
+
+# sbx_policy_state PORT: allowed or denied, whether the host's network policy
+# lets sandbox $CONF_SANDBOX_NAME reach localhost:PORT (sbx policy check);
+# nothing when sbx can't say.
+sbx_policy_state() {
+  local out args
+  have sbx || return 0
+  for args in "--sandbox $CONF_SANDBOX_NAME" ''; do
+    # shellcheck disable=SC2086 # $args is empty or two words
+    out=$(sbx policy check network $args "localhost:$1" 2>&1 </dev/null || true)
+    case "$(printf '%s\n' "$out" | head -n 1)" in
+      [Aa]llowed*) echo allowed; return 0 ;;
+      [Dd]enied*) echo denied; return 0 ;;
+    esac
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------- config
 # Expand a literal leading ~ or $HOME in a config value.
 expand_home() {
@@ -95,7 +136,8 @@ load_config() {
   local keep=(WARN_DAYS DEVENV_STATUSLINE_WARNINGS ANTHROPIC_TOKEN_EXPIRES CLAUDE_AUTH
               FIRSTMATE_REPO FIRSTMATE_AUTO_UPDATE PLAIN_WORKSPACE_DIR
               SECRET_REFRESH SECRET_REFRESH_CLAUDE SECRET_REFRESH_GITHUB
-              ANDROID_EMULATOR_PORT ANDROID_EMULATOR_MEMORY ANDROID_EMULATOR_CORES)
+              ANDROID_EMULATOR_PORT ANDROID_EMULATOR_MEMORY ANDROID_EMULATOR_CORES
+              MAGIC_CONCH_PHONE_PORT MAGIC_CONCH_SESSION_PORT)
   [ -n "${SANDBOX_NAME+x}" ] && had_sandbox_name=1
   for k in "${keep[@]}"; do
     [ -n "${!k+x}" ] && saved+=("$k=${!k}")

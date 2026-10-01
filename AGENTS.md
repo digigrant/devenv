@@ -19,10 +19,11 @@ spec: `docs/HANDOFF.md`. Usage: `README.md`. The secrets manager (Infisical):
 The owner's host runs `sbxenv.yaml` (lifecycle hook, bindings),
 `kits/devenv/spec.yaml`, and the host commands of `bin/devenv`
 (`host-prepare`, `doctor`, `secrets-init`, `secret-get`, `tailscale-setup`,
-`emulator`: `lib/cmd/host-prepare.sh`, `lib/cmd/doctor.sh`,
+`emulator`, `hub`: `lib/cmd/host-prepare.sh`, `lib/cmd/doctor.sh`,
 `lib/cmd/secrets-init.sh`, `lib/secrets.sh`, `lib/cmd/tailscale-setup.sh`,
-`lib/tailscale.sh`, `lib/cmd/emulator.sh`, `lib/android.sh`, and the emulator
-image in `android/emulator/`).
+`lib/tailscale.sh`, `lib/cmd/emulator.sh`, `lib/android.sh`,
+`lib/cmd/hub.sh`, `lib/magic-conch.sh`, `lib/common.sh`, the emulator image
+in `android/emulator/` and the hub's image in `magic-conch/hub/`).
 Say so in the PR when you change any of them. Host code must never read or
 run anything from the workspace `dev/`, which the sandbox can write.
 

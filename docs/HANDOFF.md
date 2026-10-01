@@ -10,7 +10,9 @@ refresh became configurable (branch
 2026-09-28 when Tailscale moved onto the host (branch
 `fm/devenv-tailscale-host`) and for the opt-in Android emulator (branch
 `fm/devenv-android-emulator`), and on 2026-09-29 for the Android build
-toolchain in sandboxes (branch `fm/devenv-android-toolchain`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
+toolchain in sandboxes (branch `fm/devenv-android-toolchain`), and on
+2026-10-01 for the Magic Conch hub on the host (branch
+`fm/devenv-hub-install`). Read this, then [SPEC.md](SPEC.md), [README.md](../README.md) and
 [HOST-VERIFY.md](HOST-VERIFY.md).
 
 **SPEC.md is current:** session 2 revised it to the design as built, including
@@ -106,6 +108,7 @@ All of these are now in SPEC.md; the "Spec said" column is the original.
 | Tailscale (D33, §6.14) | not in devenv; Tailscale ran on Windows | Tailscale runs in Linux on every host (the WSL 2 distro, or a Linux PC), off Windows. `devenv tailscale-setup` (host, interactive) adds Tailscale's apt repository as Tailscale documents, installs `tailscale` and `tailscale-archive-keyring`, enables tailscaled and, when needed, runs `sudo tailscale up` for the one browser sign-in; host `doctor` checks it all, including systemd in WSL and Tailscale on Windows. No auth key; nothing stored. `host-prepare` ignores Tailscale | Owner's decision, 2026-09-28 (option B), for the Magic Conch hub. Tailscale's WSL page says Tailscale on Windows and in WSL at once breaks WSL's Tailscale traffic, so the owner accepted uninstalling it on Windows. Install and sign-in are a new interactive command rather than part of `host-prepare`: the lifecycle hook can't answer sudo's password prompt or wait on a browser, and a sandbox mustn't depend on Tailscale. |
 | GitHub CLI (§6.3 step 1) | Ubuntu's `gh` from apt in plain mode; the sandbox image's own (Ubuntu's 2.46) in sbx mode | GitHub's current release from GitHub's own apt repository (`cli.github.com`), set up as GitHub documents (keyring in `/etc/apt/keyrings`, a `signed-by` source), in both modes and unpinned; it replaces the image's Ubuntu `gh` at every create | Ubuntu's 2.46 rejects `gh api --slurp` ("unknown flag"), which Firstmate's PR comment and review monitor uses, so the monitor failed on every PR. Owner's decision, 2026-09-28. |
 | Android emulator (D34, §6.15) | not in the spec | opt-in, one per host: `devenv emulator start\|stop\|status\|clean` runs a headless emulator in a Docker Engine container with `/dev/kvm`, adb published on the host's `127.0.0.1:15555`; sandboxes use it through one global rule the owner adds once (`sbx policy allow network localhost:15555`) with `devenv emulator connect\|run`; `adb` (Google's platform-tools, pinned) in every sandbox. devenv's own small image following Google's recipe, the SDK (5.1 GB) in a Docker volume, all from Google's zips pinned by sha256 | The owner wants workers to run emulator tests without leaving the sandbox (2026-09-28), and accepted the recommendation of an emulator on each Linux host reached through one firewall rule. The sandbox has no KVM and sbx's nested virtualization is macOS-only. See "Android emulator" below for the image choice. |
+| Magic Conch hub (D36, §6.16) | Tailscale only, "the hub itself and any `tailscale serve` … are later work" (D33) | `devenv hub start\|stop\|status\|admin\|clean` on the host: devenv's own image (`magic-conch/hub/Dockerfile`) from the hub's source at a pinned commit of the private `digigrant/magic-conch` (GitHub's tarball by sha256, downloaded with the `gej-machine` token from Infisical on curl's stdin), its `uv.lock` for the Python packages, and the Whisper model pinned by sha256 and mounted read-only (the hub runs offline). Container on its own Docker network, as the host user, read-only, no capabilities, `--restart unless-stopped`; both listeners on `127.0.0.1` only; `sudo tailscale serve --bg --https=8430 http://127.0.0.1:8430`; one global rule the owner adds, `sbx policy allow network localhost:8431`; the owner's login and the hub's name from `tailscale status`; data in `~/.local/share/magic-conch-hub`, owner-only, never deleted. Doctor and check cover it, including FAILs for Funnel, a served session port and a policy rule for 8430 | The owner's queued item (2026-09-30), "Phase 0/1: hub container on each host, tailscale serve config, the one firewall rule for sandbox sessions"; approved in the v0.0 plan. See "Magic Conch hub" below for the choices to confirm. |
 | Android build toolchain (D35, §6.3 step 3b) | future work (§11): "if phone-app projects don't bring their own" | in every sandbox and plain mode on x86_64: Temurin JDK 21 in `~/.local/share/jdk` (`JAVA_HOME`, first on `PATH`) and, in devenv's SDK (`ANDROID_HOME`), cmdline-tools 22.0, `platforms;android-37.0` and build-tools 36.0.0, unpacked from Google's zips pinned by sha256, each with the `package.xml` sdkmanager would write. No SDK license accepted on the owner's behalf; no Gradle (each project's wrapper) | The Magic Conch app's worker had to install a JDK, Gradle and the SDK inside its own worktree (`android/.tools`), and Firstmate's validation then couldn't run the app's tests without `android-37.0`. Owner's queued item, 2026-09-29. See "Android build toolchain" below. |
 
 ## Verification status
@@ -124,6 +127,7 @@ re-run with the new one.
 | V7 | Replaced by the clone at create (HOST-VERIFY V7). The first layout's check passed on the host. |
 | AC5, AC8, AC9, AC12, AC13–AC16 | Checked in the sandbox (AC13 on a simulated host, including the new "workspace inside the checkout" case). |
 | Android build toolchain | In the sandbox: the installers against dummy downloads (`tests/android-toolchain.sh`), real `provision.sh --plain` in both Ubuntu containers (sdkmanager lists the pinned packages, `java` is Temurin's) and the sbx simulation; with the same JDK and SDK assembled by hand from the pinned downloads, a copy of the Magic Conch app (`fm/mc-android-foundation`) builds (`assembleDebug`) and runs its JVM and Robolectric tests with no license accepted and no download into the SDK. Pending: a real sandbox rebuild. |
+| V15, AC19 (Magic Conch hub) | In the sandbox: the real image builds from the pinned tarball, the pinned model loads offline in the read-only container, the identity check, a session key, a pairing and a transcription work against it (`tests/hub-image.sh`), and the command, doctor and check against fakes (`tests/hub.sh`). Everything with real Tailscale and sbx is pending: HOST-VERIFY §13. |
 | V14, AC18 (Android emulator) | In the sandbox: raw TCP through the proxy, the real image and SDK volume (`tests/emulator-image.sh`), the command against fakes (`tests/emulator.sh`), and the live policy diagnosis. Everything on a host is pending: HOST-VERIFY §11. |
 
 ## Open work
@@ -188,9 +192,9 @@ is blocked in the sandbox. Things only the host can show:
 - that tailscaled keeps working in WSL (the MTU fix is tailscaled's own), and
   a `tailscale ping` from WSL to the phone.
 
-Later, with the Magic Conch hub: keeping the WSL distro running (WSL stops an
-idle distro, and tailscaled with it), `tailscale serve`, and perhaps
-`tailscale set --operator` so the hub needn't run as root.
+The Magic Conch hub (§8 below) now uses `tailscale serve` (with sudo once,
+not `tailscale set --operator`); keeping the WSL distro running (WSL stops an
+idle distro, and tailscaled with it) is still open.
 
 ### 5. Secrets manager (Infisical)
 
@@ -253,6 +257,40 @@ can go). The build-tools pin follows the Android Gradle Plugin's default
 (9.4.1: 36.0.0); when a project upgrades the plugin, `devenv bump
 android-build-tools <its default>`, or the project runs `sdkmanager
 --licenses` and installs it.
+
+### 8. Magic Conch hub
+
+Built on 2026-10-01 (branch `fm/devenv-hub-install`); nothing has run on a
+host yet. HOST-VERIFY §13 answers what only a host can show: the real
+`tailscale serve` (and whether `tailscale serve status --json` works without
+root, as devenv assumes), a call through the tailnet from the machine itself
+and from the phone, the policy rule, the hub across a reboot, and on WSL
+whether an idle distro stops the hub and tailscaled.
+
+Choices for the owner to confirm (all in the PR):
+
+- **The source comes from the private repo with the `gej-machine` token**, on
+  the host, from Infisical, as `host-prepare` already fetches it. The
+  alternatives were an owner login on the host (there is none, by choice)
+  or an image pushed from the sandbox (it would need a registry token and
+  bring sandbox-built code onto the host). The pin is the sha256 of GitHub's
+  tarball of the commit: GitHub has kept those stable, and if it ever
+  changes them, `start` stops with a mismatch and `devenv bump magic-conch
+  <commit>` re-pins after a check.
+- **devenv downloads the Whisper model**, pinned, instead of letting the hub
+  fetch it on its first recording: no 1.5 GB wait mid-conversation, every
+  download checked, and the hub needs no internet.
+- **The owner's login comes from `tailscale status`** (the user the machine
+  is signed in as), so nothing about the owner is in this public repo.
+- **A dedicated Docker network**: on the default bridge, any other container
+  (the emulator, which runs apps from sandboxes) could reach the phone
+  listener by its container address and forge Tailscale's identity header.
+  An `--internal` network would also block outbound traffic, but Docker
+  doesn't publish its ports (checked in the sandbox).
+
+Not built: placing session keys in sandboxes (the connector's work; an sbx
+custom secret would keep the key itself out of the sandbox), recording
+capture (a later hub feature), and anything for WSL's idle shutdown.
 
 ## Facts and traps learned
 
