@@ -8,8 +8,50 @@
 # -w '\n%{http_code}', so they print the body, a newline and the status code.
 #   FAKE_LOGIN_CODE / FAKE_READ_CODE  force an HTTP status (e.g. 401)
 #   FAKE_TS_KEY_FAIL=1                the Tailscale key download fails (curl -f)
+# For tests/hub.sh it also serves GitHub's tarball of a repository at a
+# commit (api.github.com/repos/<o>/<r>/tarball/<sha>, only with the gej-machine
+# token as a header on stdin) and Hugging Face's model files from
+# $FAKE_DOWNLOADS, passes calls to 127.0.0.1 on to the real curl (a fake hub
+# listens there), and stands in for tailscale serve: a call to
+# https://devhost.tail1234.ts.net:<port> goes to http://127.0.0.1:<port> with
+# Tailscale's identity header for FAKE_TS_LOGIN, while tests/fakes/tailscale's
+# serve configuration publishes that port. And it stands in for a sandbox's
+# proxy: a call to http://host.docker.internal:<port> gets the proxy's 403
+# "Blocked by network policy" unless FAKE_SBX_POLICY_ALLOW lists
+# localhost:<port>, and then goes to 127.0.0.1:<port>, or gets the proxy's 500
+# "connection refused" when nothing listens there. These answers expect -D -
+# and -w '\n%{http_code}', as lib/magic-conch.sh's probe asks.
 set -euo pipefail
 printf 'curl %s\n' "$*" >> "$FAKE_LOG/argv"
+real_curl() { PATH=/usr/local/bin:/usr/bin:/bin exec curl "$@"; }
+for a in "$@"; do
+  case "$a" in
+    http://127.0.0.1:*) real_curl "$@" ;;
+    http://host.docker.internal:*)
+      port=${a#http://host.docker.internal:}; port=${port%%/*}
+      case " ${FAKE_SBX_POLICY_ALLOW:-} " in
+        *" localhost:$port "*) ;;
+        *) printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nBlocked by network policy: domain localhost:%s\n  detail: no matching allow rule\n\n403' "$port"; exit 0 ;;
+      esac
+      if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+        printf 'HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\ndial tcp4 127.0.0.1:%s: connect: connection refused\n\n500' "$port"; exit 0
+      fi
+      args=()
+      for b in "$@"; do if [ "$b" = "$a" ]; then args+=("http://127.0.0.1:${a#http://host.docker.internal:}"); else args+=("$b"); fi; done
+      real_curl "${args[@]}"
+      ;;
+    https://devhost.tail1234.ts.net:*)
+      port=${a#https://devhost.tail1234.ts.net:}; port=${port%%/*}
+      jq -e --arg p "$port" '.TCP[$p].HTTPS == true' "$FAKE_LOG/ts-serve.json" >/dev/null 2>&1 \
+        || { echo "curl: (7) Failed to connect to devhost.tail1234.ts.net port $port" >&2; printf '000'; exit 7; }
+      args=()
+      for b in "$@"; do
+        if [ "$b" = "$a" ]; then args+=("http://127.0.0.1:$port${a#https://devhost.tail1234.ts.net:"$port"}"); else args+=("$b"); fi
+      done
+      real_curl "${args[@]}" -H "Tailscale-User-Login: ${FAKE_TS_LOGIN:-owner@example.com}"
+      ;;
+  esac
+done
 url='' config=0 data=0 dump=0 hdr_stdin=0 out=''
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -73,6 +115,18 @@ case "$url" in
   https://pkgs.tailscale.com/stable/*/*.noarmor.gpg)
     [ -z "${FAKE_TS_KEY_FAIL:-}" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     printf 'fake tailscale apt key for %s\n' "${url#https://pkgs.tailscale.com/stable/}" > "${out:-/dev/stdout}"
+    ;;
+  https://api.github.com/repos/*/tarball/*)
+    [ "$hdr_stdin" = 1 ] && [ "$(cat)" = "Authorization: token $FAKE_GITHUB" ] \
+      || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    f="${FAKE_DOWNLOADS:-/nonexistent}/tarball-${url##*/}.tar.gz"
+    [ -f "$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    cp "$f" "${out:?fake curl: downloads need -o}"
+    ;;
+  https://huggingface.co/*/resolve/*)
+    f="${FAKE_DOWNLOADS:-/nonexistent}/${url##*/}"
+    [ -f "$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    cp "$f" "${out:?fake curl: downloads need -o}"
     ;;
   https://dl.google.com/android/repository/*|https://github.com/adoptium/*/releases/download/*)
     f="${FAKE_DOWNLOADS:-/nonexistent}/${url##*/}"

@@ -111,8 +111,8 @@ and native Linux behave the same.
 
 Every devenv host runs Tailscale in Linux: inside the WSL 2 distro on the
 Windows PC, and natively on a Linux PC. (It is for Magic Conch, a phone app
-that will reach a hub on each machine over the tailnet; the hub isn't part of
-devenv yet.) Once per machine:
+that reaches a hub on each machine over the tailnet: [Magic Conch
+hub](#magic-conch-hub).) Once per machine:
 
 ```sh
 ~/devenv/bin/devenv tailscale-setup
@@ -154,8 +154,8 @@ all of this and prints the fix for anything missing.
   [Machines](https://console.tailscale.com/admin/machines) page, and rename
   the WSL one there if you like.
 
-**Once per tailnet, in the admin console** (the Magic Conch hub will use
-`tailscale serve`, which needs both; devenv doesn't configure `serve`): open
+**Once per tailnet, in the admin console** (the Magic Conch hub uses
+`tailscale serve`, which needs both; `devenv hub start` configures it): open
 the [DNS](https://console.tailscale.com/admin/dns) page, turn on **MagicDNS**
 if it is off (tailnets created since October 2022 have it on), and under
 **HTTPS Certificates** select **Enable HTTPS**. Enabling HTTPS publishes the
@@ -492,16 +492,127 @@ lets in, can drive the device. Using it accepts the
 To use another port, set `ANDROID_EMULATOR_PORT` (devenv.conf by PR, or in the
 environment for one run) and allow that port instead.
 
+## Magic Conch hub
+
+[Magic Conch](https://github.com/digigrant/magic-conch) (a private repo) lets
+you talk to Claude sessions from your phone, walkie-talkie style. The phone
+app talks to a hub on each Linux host, over the tailnet only, and sessions in
+the sandboxes talk to the same hub. `devenv hub` runs that hub on the host,
+in a Docker container that starts again at every boot.
+
+```
+phone ──HTTPS over the tailnet──► tailscale serve ──► 127.0.0.1:8430  phone listener   ┐
+                                                                                         ├ hub container
+sandbox ──host.docker.internal:8431 (one policy rule)──► 127.0.0.1:8431  session listener ┘
+```
+
+- **The phone listener** is published on the host's `127.0.0.1:8430` only.
+  `tailscale serve` puts it on the tailnet as
+  `https://<machine>.<tailnet>.ts.net:8430`, with a certificate for that name.
+  The hub accepts only calls that `tailscale serve` marks as coming from your
+  Tailscale login, and only from a paired phone. Nothing else may reach it:
+  never Tailscale Funnel, and never a sandbox (no policy rule for 8430).
+  `devenv doctor` fails when either could.
+- **The session listener** is published on the host's `127.0.0.1:8431` only,
+  never on the tailnet. Sandboxes reach it at
+  `http://host.docker.internal:8431` through one network policy rule, as for
+  the emulator. Each session has its own key.
+- **Your Tailscale login and the hub's name** come from `tailscale status`:
+  the login of the user this machine is signed in as (a tagged machine has
+  none, and `start` refuses it), and the machine's name. Nothing about you goes
+  in this repo.
+- **What is pinned** (`versions.env`): the hub's source (a commit of
+  `digigrant/magic-conch`, as GitHub's tarball, by sha256), the Python and uv
+  images (by digest), the hub's Python packages (its own `uv.lock`, whose
+  hashes uv checks), and the Whisper model (`Systran/faster-whisper-medium.en`
+  at a revision, each file by sha256). The repo is private, so `start`
+  downloads the source with the `gej-machine` token from Infisical, the same
+  login the sandbox uses (the keyring must be set up: `devenv secrets-init`).
+- **The container** runs as you, with a read-only file system, no
+  capabilities, on its own Docker network (so no other container, such as the
+  emulator, can reach the listeners), and with Hugging Face offline: the hub
+  needs no network beyond its listeners.
+- **Its data** (paired phones, session keys as hashes, the queues and the text
+  history) is in `~/.local/share/magic-conch-hub`, owner-only (mode 700), and
+  survives `stop`, `clean` and image updates. devenv never deletes it.
+
+| Cost | |
+|---|---|
+| Disk | the image (about 0.75 GB) and the Whisper model in `~/.local/share/devenv/whisper` (1.5 GB) |
+| Memory | about 1 to 2 GB while it transcribes; little when idle |
+| Time | the first start downloads the model and builds the image (a minute or two on a fast line); later starts take seconds |
+
+**Once per host:**
+
+1. Docker Engine in this Linux, not Docker Desktop (see [Android
+   emulator](#android-emulator-opt-in), step 1), started at boot
+   (`sudo systemctl enable docker`), so the hub comes back after a reboot.
+2. Tailscale signed in, with MagicDNS and HTTPS certificates on for the
+   tailnet ([Tailscale](#tailscale)), and the keyring set up
+   ([Secrets](#secrets-infisical)).
+3. Start it:
+   ```sh
+   ~/devenv/bin/devenv hub start
+   ```
+   It builds the image and downloads the model the first time, starts the
+   container, waits for both listeners, and runs
+   `sudo tailscale serve --bg --https=8430 http://127.0.0.1:8430` (sudo asks
+   for your password once; the setting survives reboots). It refuses, and
+   changes nothing, while Funnel is on for 8430, something else is served on
+   8430, or the session port is served at all.
+4. Let sandboxes reach the session listener. One rule, for every sandbox,
+   that survives rebuilds:
+   ```sh
+   sbx policy allow network localhost:8431
+   ```
+5. `~/devenv/bin/devenv doctor` checks all of it in its "Magic Conch hub"
+   section, including a call to the hub through `tailscale serve` as you.
+
+**Pairing and sessions**, with the hub's administration tool, which runs in
+the container on the hub's own data (`devenv hub admin --help`):
+
+```sh
+~/devenv/bin/devenv hub admin pairing-code                      # pair a phone: a URL, a code (10 minutes) and a QR code
+~/devenv/bin/devenv hub admin devices                           # the paired phones
+~/devenv/bin/devenv hub admin revoke-device DEVICE_ID           # cut off a lost phone
+~/devenv/bin/devenv hub admin add-session firstmate Firstmate   # prints the session's key once, alone on stdout
+~/devenv/bin/devenv hub admin default-session firstmate         # where new recordings go
+~/devenv/bin/devenv hub admin sessions
+~/devenv/bin/devenv hub admin replace-session-key firstmate     # after a lost key or a rebuilt sandbox
+~/devenv/bin/devenv hub admin revoke-session firstmate
+```
+
+A session key belongs where the session's connector reads it, never in a
+repository; the firstmate connector, and where it reads its key, are built
+in their own repositories.
+
+**Day to day:**
+
+```sh
+~/devenv/bin/devenv hub status   # the container, both listeners, tailscale serve, the policy
+~/devenv/bin/devenv hub start    # again after a devenv update: a new pin or setting replaces the container
+~/devenv/bin/devenv hub stop     # stop it; data, image and model stay
+~/devenv/bin/devenv hub clean    # also remove the image, network, model and tailscale serve's entry; data stays
+```
+
+In a sandbox, `devenv hub status` says whether the session listener answers
+(and the phone listener stays out of reach), and `devenv check` warns when
+the policy lets the sandbox reach the hub but it doesn't answer. Other ports:
+`MAGIC_CONCH_PHONE_PORT` and `MAGIC_CONCH_SESSION_PORT` in `devenv.conf`.
+
+**On WSL**, WSL can stop an idle distro, and the hub and tailscaled with it;
+HOST-VERIFY §13 checks whether it stays up.
+
 ## Commands
 
 `bin/devenv` (on `PATH` inside the sandbox):
 
 | Command | Where | What |
 |---|---|---|
-| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, the Android build toolchain, adb and whether the host's emulator answers. |
-| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
-| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-cmdline-tools <v\|latest>`, `android-platform <android-NN.N>`, `android-build-tools <v\|latest>`, `jdk <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `--list`. Prints the diff; never commits. |
-| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets and emulator commands and the Android toolchain installers against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, `start`, `entry` and doctor's token-mode Claude sign-in checks against a temporary home and a fake `/proc`, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
+| `devenv doctor` | host, sandbox, plain | Full health report. On the host: sbx, KVM, policy, Tailscale (installed from Tailscale's repository, tailscaled running, signed in, MagicDNS and HTTPS certificates; on WSL also systemd and Tailscale on Windows), the keyring and both Infisical secrets (never prompts), checkout location, the Android emulator (optional), the Magic Conch hub (container, listeners, `tailscale serve`, a call through the tailnet, the policy rules: the session port allowed, the phone port never; nothing when it isn't set up), operating rule. Inside: pinned tools, GitHub identity, Claude login, herdr, Firstmate bootstrap, settings, skill links, the Android build toolchain, adb and whether the host's emulator answers, and whether the host's Magic Conch hub answers (with its phone listener out of reach). |
+| `devenv check [--quiet]` | sandbox, plain | Staleness warnings: Firstmate off your fork's `main` or a failed automatic update, uncommitted changes in the devenv clone the sandbox runs from, tool versions, GitHub token expiry (via the API), `ANTHROPIC_TOKEN_EXPIRES` (if set), Firstmate config drift, herdr detection override, and in a sandbox the Magic Conch hub: allowed by the policy but not answering, or its phone listener within reach. Shown at entry and as `⚠ devenv:N` in Claude's status line. |
+| `devenv bump …` | a writable clone | Update `versions.env`: `herdr <v>`, `herdr-manifest <commit\|latest>`, `treehouse\|no-mistakes <v\|latest>`, `npm <pkg> <v\|latest>`, `node <v\|latest-lts>`, `platform-tools <v\|latest>`, `android-cmdline-tools <v\|latest>`, `android-platform <android-NN.N>`, `android-build-tools <v\|latest>`, `jdk <v\|latest>`, `android-emulator <build\|latest>`, `android-system-image <api> [tag]`, `android-base-image [image:tag]`, `magic-conch <commit\|latest>`, `magic-conch-base-image [image:tag]`, `uv-image <v\|latest>`, `whisper-model [repo] [revision\|latest]`, `--list`. Prints the diff; never commits. |
+| `devenv test` | sandbox or any Docker host | Status line byte-identity, the secrets, emulator and hub commands and the Android toolchain installers against fakes, `tailscale-setup` and doctor's Tailscale checks against fakes, `start`, `entry` and doctor's token-mode Claude sign-in checks against a temporary home and a fake `/proc`, shellcheck, `provision.sh --plain` in `ubuntu:24.04` and `ubuntu:26.04` containers (twice, to prove it's idempotent), a simulated sbx create that runs the kit's own install and startup steps, and the keyring code against a real gnome-keyring in a container. |
 | `devenv start` | sandbox | Run by the kit at every start: reapply Claude settings, status line, `CLAUDE.md`, herdr config, skill and memory links, warnings. |
 | `devenv entry` | sandbox | The entrypoint (via `devenv-entry`). |
 | `devenv host-prepare` | host | The `lifecycle.initialize` hook: unlocks the keyring if it is locked (a pop-up window), checks both secrets, the refresh settings and the checkout location, creates `dev/`, gives the sandbox the `github` secret and sets up the Claude sign-in. |
@@ -509,6 +620,8 @@ environment for one run) and allow that port instead.
 | `devenv secret-get NAME` | host | Prints one secret from Infisical (`GITHUB_GEJ_MACHINE_PAT` or `CLAUDE_CODE_OAUTH_TOKEN`). sbx runs it; you don't need to. |
 | `devenv tailscale-setup` | host | Installs Tailscale from Tailscale's apt repository, starts tailscaled, and signs the machine in with `sudo tailscale up` (a browser sign-in, once per machine; no auth key). On WSL it first checks systemd and that Tailscale isn't running on Windows. Interactive; run it again safely. |
 | `devenv emulator start\|stop\|status\|clean` | host | The opt-in Android emulator ([Android emulator](#android-emulator-opt-in)): start it (building its image and SDK volume the first time) and wait for Android to boot; stop it; report the container, boot, adb, KVM and the policy rule; remove its image, SDK volume and downloads. |
+| `devenv hub start\|stop\|status\|admin …\|clean` | host | The Magic Conch hub ([Magic Conch hub](#magic-conch-hub)): start it (building its image and fetching its model the first time) and publish its phone listener with `tailscale serve`; stop it; report the container, both listeners, `tailscale serve`, a call through the tailnet and the policy rules; run its administration tool (pairing codes, session keys, revocation); remove its image, network, model and serve entry (never its data). |
+| `devenv hub status` | sandbox, plain | Whether the host's hub answers on its session listener, and, in a sandbox, that its phone listener is out of reach. |
 | `devenv emulator connect\|run -- CMD\|status` | sandbox, plain | Connect adb to the host's emulator and print its serial; connect and run CMD with `ANDROID_SERIAL` set, one run at a time; say whether it can be reached and why not. |
 
 ### Updating versions
@@ -592,11 +705,12 @@ bin/                   devenv CLI and the entrypoint shim
 lib/                   shared shell code; lib/cmd/ has one file per subcommand
 agents/claude/         everything Claude-specific (status line, overlay, CLAUDE.md, hooks)
 android/emulator/      the opt-in host emulator's image: Dockerfile and launch.sh
+magic-conch/hub/       the Magic Conch hub's image: Dockerfile
 firstmate/config/      starting copy of Firstmate's config
 firstmate/data/        starting copy of Firstmate's data (this project's own registration)
 herdr/                 herdr config, and its Claude detection rules (see below)
 skills/                grill-me and grilling, verbatim
-tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), Tailscale setup tests (fakes), emulator tests (fakes, real image), Android toolchain tests (fakes), fixtures
+tests/                 container smoke test, sbx simulation, status line identity test, secrets tests (fakes, real keyring), Tailscale setup tests (fakes), emulator tests (fakes, real image), Magic Conch hub tests (fakes, real image), Android toolchain tests (fakes), fixtures
 ```
 
 ### herdr's Claude detection rules
@@ -716,3 +830,7 @@ when herdr is bumped past the version it was tested with.
 - v3 kits, once a v3 Claude workload is available to build on: a v3 kit can
   declare where Claude reads skills, so sbx's shared store could replace the
   links.
+- Magic Conch: placing a session's key where its connector reads it inside
+  the sandbox (perhaps as an sbx custom secret, so the sandbox only sees a
+  placeholder), and the hub's later features (recording capture, voices) as
+  the hub gains them.

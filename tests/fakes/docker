@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# Fake docker for tests/emulator.sh (and tests/secrets.sh's doctor runs): logs
-# its argv to $FAKE_LOG/argv and keeps images, volumes and one container as
-# files under $FAKE_LOG/docker, answering the calls lib/cmd/emulator.sh makes
-# the way Docker Engine 29 does.
+# Fake docker for tests/emulator.sh and tests/hub.sh (and tests/secrets.sh's
+# doctor runs): logs its argv to $FAKE_LOG/argv and keeps images, volumes,
+# networks and containers (by name) as files under $FAKE_LOG/docker, answering
+# the calls lib/cmd/emulator.sh and lib/cmd/hub.sh make the way Docker Engine
+# 29 does.
 #   FAKE_DOCKER_INFO=denied|down   docker info fails like a socket without access, or a stopped daemon
 #   FAKE_DOCKER_OS                 docker info's OperatingSystem (default: Ubuntu 24.04.3 LTS)
-#   FAKE_DOCKER_BOOT=N|exit        the container reports "running starting" for N inspects (default 2),
-#                                  then "running healthy"; exit: it stops while booting
-#   FAKE_DOCKER_RUN_FAIL=port      docker run -d fails: the host port is taken
+#   FAKE_DOCKER_BOOT=N|exit        a container reports "running starting" for N inspects (default 2),
+#                                  then "running healthy"; exit: it stops while starting
+#   FAKE_DOCKER_RUN_FAIL=port      docker run -d fails: a host port is taken
 #   FAKE_DOCKER_ACCEL=0|3          the status line of emulator -accel-check (0: KVM works)
+#   FAKE_DOCKER_BUILD_FAIL=1       docker build fails
+# A container's file holds its state, image, inspect count and labels; `docker
+# run -d` also keeps its whole argv in <name>.argv. `docker build` records the
+# files of its context in $FAKE_LOG/docker/context. `docker exec` answers the
+# hub's administration tool (python -m magic_conch_hub.admin).
 set -euo pipefail
 printf 'docker %s\n' "$*" >> "$FAKE_LOG/argv"
 d=$FAKE_LOG/docker
-mkdir -p "$d/images" "$d/volumes"
+mkdir -p "$d/images" "$d/volumes" "$d/networks" "$d/containers"
 key() { printf '%s' "$1" | tr '/:' '__'; }
 
 # flag NAME ARGS...: the value after NAME (e.g. --label).
@@ -23,6 +29,15 @@ flag() {
     [ "$1" = "$name" ] && { printf '%s' "${2-}"; return 0; }
     shift
   done
+}
+# labels ARGS...: every --label value, space-separated.
+labels() {
+  local out=''
+  while [ $# -gt 0 ]; do
+    [ "$1" = --label ] && out+="${2-} "
+    shift
+  done
+  printf '%s' "${out% }"
 }
 
 case "${1:-}" in
@@ -35,7 +50,9 @@ case "${1:-}" in
     ;;
   version) echo 29.0.0 ;;
   build)
+    [ -z "${FAKE_DOCKER_BUILD_FAIL:-}" ] || { echo "ERROR: failed to build: fake failure" >&2; exit 1; }
     image=$(flag -t "$@") label=$(flag --label "$@")
+    (cd "${*: -1}" && find . -type f | sort) > "$d/context"
     printf '%s\n%s\n' "$image" "$label" > "$d/images/$(key "$image")"
     echo "sha256:fake"
     ;;
@@ -68,16 +85,24 @@ case "${1:-}" in
       rm) rm -f "$d/volumes/${*: -1}" "$d/volumes/${*: -1}.done" ;;
     esac
     ;;
+  network)
+    case "${2:-}" in
+      inspect) [ -f "$d/networks/$3" ] ;;
+      create) printf '%s\n' "$(flag --label "$@")" > "$d/networks/${*: -1}" ;;
+      rm) [ -f "$d/networks/$3" ] && rm -f "$d/networks/$3" ;;
+    esac
+    ;;
   run)
     vol=$(flag -v "$@"); vol=${vol%%:*}
     if [ "${2:-}" = -d ]; then
+      name=$(flag --name "$@")
       if [ "${FAKE_DOCKER_RUN_FAIL:-}" = port ]; then
         echo "docker: Error response from daemon: failed to set up container networking: Bind for 127.0.0.1:${FAKE_PORT:-15555} failed: port is already allocated" >&2
-        : > "$d/container"
+        printf 'created\n\n0\n\n' > "$d/containers/$name"
         exit 125
       fi
-      image=${*: -1}
-      printf 'running\n%s\n0\n' "$image" > "$d/container"
+      printf 'running\n%s\n0\n%s\n' "${*: -1}" "$(labels "$@")" > "$d/containers/$name"
+      printf '%s\n' "$@" > "$d/containers/$name.argv"
       echo fakecontainerid
       exit 0
     fi
@@ -96,17 +121,24 @@ case "${1:-}" in
     esac
     ;;
   inspect)
-    [ -s "$d/container" ] || { echo "error: no such object: ${*: -1}" >&2; exit 1; }
+    c=$d/containers/${*: -1}
+    [ -s "$c" ] || { echo "error: no such object: ${*: -1}" >&2; exit 1; }
     case "$3" in
-      *Config.Image*) sed -n 2p "$d/container" ;;
+      *Config.Image*) sed -n 2p "$c" ;;
+      *Config.Labels*)
+        want=$(printf '%s' "$3" | sed -n 's/.*"\(.*\)".*/\1/p')
+        read -r -a ls < <(sed -n 4p "$c")
+        for l in "${ls[@]}"; do [ "${l%%=*}" = "$want" ] && echo "${l#*=}"; done
+        exit 0
+        ;;
       *)
-        state=$(sed -n 1p "$d/container") n=$(sed -n 3p "$d/container")
+        state=$(sed -n 1p "$c") n=$(sed -n 3p "$c")
         if [ "$state" = running ]; then
           case "${FAKE_DOCKER_BOOT:-2}" in
-            exit) printf 'exited\n%s\n%s\n' "$(sed -n 2p "$d/container")" "$n" > "$d/container"; echo exited; exit 0 ;;
+            exit) sed -i '1s/.*/exited/' "$c"; echo exited; exit 0 ;;
           esac
           if [ "$n" -lt "${FAKE_DOCKER_BOOT:-2}" ]; then
-            printf 'running\n%s\n%s\n' "$(sed -n 2p "$d/container")" $((n + 1)) > "$d/container"
+            sed -i "3s/.*/$((n + 1))/" "$c"
             echo "running starting"
           else
             echo "running healthy"
@@ -117,7 +149,27 @@ case "${1:-}" in
         ;;
     esac
     ;;
-  stop) [ -s "$d/container" ] && sed -i '1s/.*/exited/' "$d/container" ;;
-  rm) rm -f "$d/container" ;;
-  logs) echo "ERROR        | x86_64 emulation currently requires hardware acceleration!" ;;
+  exec)
+    c=$d/containers/$2
+    [ "$(sed -n 1p "$c" 2>/dev/null)" = running ] || { echo "Error response from daemon: container $2 is not running" >&2; exit 1; }
+    shift 2
+    [ "${1:-} ${2:-} ${3:-}" = "python -m magic_conch_hub.admin" ] || { echo "fake docker: unexpected exec: $*" >&2; exit 2; }
+    case "${4:-}" in
+      add-session) echo "mcs_FAKEsessionKEYfakeSESSIONkey0000000000000"; echo "Session $5 added; its key is above." >&2 ;;
+      sessions) echo "firstmate  Firstmate  default" ;;
+      *) echo "usage: python -m magic_conch_hub.admin COMMAND" >&2; exit 2 ;;
+    esac
+    ;;
+  stop)
+    c=$d/containers/${*: -1}
+    [ -s "$c" ] && sed -i '1s/.*/exited/' "$c"
+    exit 0
+    ;;
+  rm) rm -f "$d/containers/${*: -1}" "$d/containers/${*: -1}.argv" ;;
+  logs)
+    case "${*: -1}" in
+      devenv-android-emulator) echo "ERROR        | x86_64 emulation currently requires hardware acceleration!" ;;
+      *) echo "ERROR magic_conch_hub.serve: MAGIC_CONCH_HUB_OWNER_LOGIN must name the owner's Tailscale login" ;;
+    esac
+    ;;
 esac

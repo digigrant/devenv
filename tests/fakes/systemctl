@@ -2,7 +2,8 @@
 # Fake systemctl for tests/tailscale.sh: logs its argv to $FAKE_LOG/argv and
 # answers for tailscaled from $FAKE_LOG/tailscaled, which holds "active
 # enabled", "active disabled", or nothing (inactive and disabled);
-# `enable --now tailscaled` makes it active and enabled.
+# `enable --now tailscaled` makes it active and enabled. For tests/hub.sh,
+# `is-enabled docker` answers FAKE_DOCKER_ENABLED (enabled by default).
 set -euo pipefail
 printf 'systemctl %s\n' "$*" >> "$FAKE_LOG/argv"
 state=$(cat "$FAKE_LOG/tailscaled" 2>/dev/null || true)
@@ -10,5 +11,6 @@ case "$*" in
   "is-active --quiet tailscaled") [ "${state%% *}" = active ] ;;
   "is-enabled tailscaled") if [ "${state#* }" = enabled ]; then echo enabled; else echo disabled; exit 1; fi ;;
   "enable --now tailscaled") echo "active enabled" > "$FAKE_LOG/tailscaled" ;;
+  "is-enabled docker") echo "${FAKE_DOCKER_ENABLED:-enabled}"; [ "${FAKE_DOCKER_ENABLED:-enabled}" = enabled ] ;;
   *) echo "fake systemctl: unexpected call" >&2; exit 2 ;;
 esac

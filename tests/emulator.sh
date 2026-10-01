@@ -175,7 +175,7 @@ run -- emulator start
 [ "$RC" = 0 ] && called 'docker volume create' && ! called 'docker build' && printf '%s' "$ERR" | grep -qF "removed the SDK volume $vol" \
   && pass "a new system image pin: a new SDK volume, the old one removed" || fail "new pin: exit $RC, stderr: $ERR"
 run -- emulator clean
-[ "$RC" = 0 ] && [ -z "$(find "$FAKE_LOG/docker/images" "$FAKE_LOG/docker/volumes" -type f)" ] && [ ! -e "$CACHE" ] && [ ! -e "$FAKE_LOG/docker/container" ] \
+[ "$RC" = 0 ] && [ -z "$(find "$FAKE_LOG/docker/images" "$FAKE_LOG/docker/volumes" -type f)" ] && [ ! -e "$CACHE" ] && [ ! -e "$FAKE_LOG/docker/containers/devenv-android-emulator" ] \
   && pass "clean: container, images, SDK volumes and downloads removed" || fail "clean: exit $RC, left: $(ls "$FAKE_LOG/docker/images" "$FAKE_LOG/docker/volumes")"
 
 echo "connect and run (plain mode: the emulator on 127.0.0.1)"
