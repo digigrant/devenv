@@ -446,11 +446,12 @@ to another Android version.
    sudo usermod -aG docker $USER     # then log out and in again
    ```
    Membership in the `docker` group is as good as root on this machine.
-2. Let sandboxes reach the emulator's adb port. One rule, for every sandbox,
-   that survives rebuilds:
-   ```sh
-   sbx policy allow network localhost:15555
-   ```
+2. Sandboxes reach the emulator's adb port through a rule in the kit
+   (`permissions.network.allow` in `kits/devenv/spec.yaml`: `localhost:15555`),
+   so a sandbox built from this kit needs nothing more. A sandbox made from an
+   older kit needs a rebuild (`sbx rm`, then run it again). If you change
+   `ANDROID_EMULATOR_PORT`, edit the kit's rule too, or allow it by hand:
+   `sbx policy allow network localhost:<port>`.
 3. `~/devenv/bin/devenv doctor` checks both, and KVM, in its "Android
    emulator" section.
 
@@ -482,7 +483,7 @@ port. The build itself runs in the sandbox, with the toolchain in
 host's `127.0.0.1:15555` only. adb speaks raw TCP, not HTTP; sbx's proxy
 relays a sandbox's TCP connection to `host.docker.internal:<port>` to the
 host's `localhost:<port>` when the network policy allows `localhost:<port>`
-(sbx 0.30 and later), which is the rule above.
+(sbx 0.30 and later), which is the kit's rule (step 2).
 
 **Limits.** One emulator per host, shared by the sandbox's workers, one test
 run at a time. x86_64 hosts only. No Google Play (the Google APIs image). adb
@@ -503,7 +504,7 @@ in a Docker container that starts again at every boot.
 ```
 phone ──HTTPS over the tailnet──► tailscale serve ──► 127.0.0.1:8430  phone listener   ┐
                                                                                          ├ hub container
-sandbox ──host.docker.internal:8431 (one policy rule)──► 127.0.0.1:8431  session listener ┘
+sandbox ──host.docker.internal:8431 (kit's policy rule)──► 127.0.0.1:8431  session listener ┘
 ```
 
 - **The phone listener** is published on the host's `127.0.0.1:8430` only.
@@ -515,7 +516,7 @@ sandbox ──host.docker.internal:8431 (one policy rule)──► 127.0.0.1:843
   `devenv doctor` fails when either could.
 - **The session listener** is published on the host's `127.0.0.1:8431` only,
   never on the tailnet. Sandboxes reach it at
-  `http://host.docker.internal:8431` through one network policy rule, as for
+  `http://host.docker.internal:8431` through a network policy rule from the kit, as for
   the emulator. Each session has its own key.
 - **Your Tailscale login and the hub's name** come from `tailscale status`:
   the login of the user this machine is signed in as (a tagged machine has
@@ -560,11 +561,11 @@ sandbox ──host.docker.internal:8431 (one policy rule)──► 127.0.0.1:843
    for your password once; the setting survives reboots). It refuses, and
    changes nothing, while Funnel is on for 8430, something else is served on
    8430, or the session port is served at all.
-4. Let sandboxes reach the session listener. One rule, for every sandbox,
-   that survives rebuilds:
-   ```sh
-   sbx policy allow network localhost:8431
-   ```
+4. Sandboxes reach the session listener through a rule in the kit
+   (`localhost:8431`), so a sandbox built from this kit needs nothing more.
+   A sandbox made from an older kit needs a rebuild (`sbx rm`, then run it
+   again). If you change `MAGIC_CONCH_SESSION_PORT`, edit the kit's rule too,
+   or allow it by hand: `sbx policy allow network localhost:<port>`.
 5. `~/devenv/bin/devenv doctor` checks all of it in its "Magic Conch hub"
    section, including a call to the hub through `tailscale serve` as you.
 
@@ -808,8 +809,9 @@ when herdr is bumped past the version it was tested with.
   upgrade): `sdkmanager --licenses`, then `sdkmanager "<package>"`, or pin it
   in devenv (`devenv bump android-build-tools <version>`).
 - **`devenv emulator` in the sandbox says the network policy doesn't let it
-  reach `localhost:15555`.** On the host, once:
-  `sbx policy allow network localhost:15555`. **"no emulator answers"**: start
+  reach `localhost:15555`.** The kit allows it, so this sandbox was made from
+  an older kit: on the host, `sbx rm` it and run it again (after changing the
+  port, `sbx policy allow network localhost:<port>`). **"no emulator answers"**: start
   it on the host, `~/devenv/bin/devenv emulator start`. On the host,
   `devenv emulator status` and `docker logs devenv-android-emulator` show the
   rest; `devenv emulator stop`, then `start`, gives a fresh device.

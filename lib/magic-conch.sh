@@ -8,7 +8,7 @@
 # phone listener (MAGIC_CONCH_PHONE_PORT), which only `tailscale serve` may
 # reach, and the session listener (MAGIC_CONCH_SESSION_PORT), which sandboxes
 # reach at host.docker.internal once the host's network policy allows
-# localhost:<port>.
+# localhost:<port> (the kit's permissions.network.allow).
 
 MC_PROTOCOL=1.0   # the Magic Conch protocol version the probes speak
 
@@ -62,7 +62,7 @@ mc_env_report() {
   s=$(mc_probe_session "$host")
   case "$s" in
     hub\ *) echo "ok: the hub's session listener answers at http://$host:$MAGIC_CONCH_SESSION_PORT" ;;
-    blocked\ *) echo "info: no hub reachable: the network policy doesn't let this sandbox reach localhost:$MAGIC_CONCH_SESSION_PORT (on a host that runs the hub, allow it once with: sbx policy allow network localhost:$MAGIC_CONCH_SESSION_PORT)" ;;
+    blocked\ *) echo "info: no hub reachable: the network policy doesn't let this sandbox reach localhost:$MAGIC_CONCH_SESSION_PORT (the kit allows it, so a sandbox made from an older kit needs a rebuild; after changing the port, run on the host: sbx policy allow network localhost:$MAGIC_CONCH_SESSION_PORT)" ;;
     down\ *)
       if [ "$(detect_mode)" = sbx ]; then
         echo "warn: the network policy lets this sandbox reach localhost:$MAGIC_CONCH_SESSION_PORT, but no hub answers there; on the host, run: devenv hub start"

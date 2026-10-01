@@ -970,7 +970,8 @@ Run this on each host (WSL2 and the native Linux laptop); report which one.
    ```
    Expected: `ok    Docker Engine 29.…`, notes that the image and SDK volume
    aren't made yet and that it isn't running, and `warn  sandboxes can't reach
-   it: allow it once with: sbx policy allow network localhost:15555`. Report
+   it: the network policy denies localhost:15555; the kit allows it, so rebuild a
+   sandbox made from an older kit (…)`. Report
    the lines if any says `FAIL`, or if the policy line is missing (then paste
    `sbx policy check network --sandbox dev localhost:15555`).
 
@@ -998,9 +999,10 @@ Run this on each host (WSL2 and the native Linux laptop); report which one.
    Paste it (the README says about 5 GB of memory, 5.1 GB of volume and under
    0.5 GB of image).
 
-5. **The policy rule**, once (it covers every sandbox and survives rebuilds):
+5. **The policy rule** comes from the kit (`localhost:15555`), so a sandbox
+   built from this kit already has it; if `dev` was made from an older kit,
+   rebuild it first (`sbx rm dev`, then run it again). Nothing to add by hand:
    ```sh
-   sbx policy allow network localhost:15555
    ~/devenv/bin/devenv emulator status
    ```
    Expected: `ok    running; Android booted; adb answers on 127.0.0.1:15555`
@@ -1030,7 +1032,7 @@ Run this on each host (WSL2 and the native Linux laptop); report which one.
    Expected: `Version 37.0.1-…`; `ok    adb 37.0.1` and `ok    an emulator
    answers at host.docker.internal:15555`; `connected to the emulator:
    host.docker.internal:15555 (Android 16, API 36)` and the serial; `36`; a
-   package count in the hundreds. Before step 5's rule, `status` instead says
+   package count in the hundreds. On a sandbox from an older kit, `status` instead says
    `the network policy doesn't let this sandbox reach localhost:15555 …`.
    Paste everything. If `connect` fails after `status` said the emulator
    answers, paste `adb devices -l` and `adb connect host.docker.internal:15555`.
@@ -1095,7 +1097,7 @@ Conch app; this is the check in the real sandbox.
 
 `devenv hub` runs the Magic Conch hub on the host, in a Docker Engine
 container, with `tailscale serve` putting its phone listener on the tailnet
-and one network policy rule letting sandboxes reach its session listener
+and one network policy rule (from the kit) letting sandboxes reach its session listener
 (README: "Magic Conch hub"). The agent built and tested everything it could
 in a sandbox: the real image builds from the pinned source, the pinned
 Whisper model loads offline in the read-only container, and pairing, a
@@ -1149,17 +1151,18 @@ Run it on the desktop (WSL 2) first; the laptop later. Report which one.
    127.0.0.1:8431 (sessions)`, the `sudo tailscale serve --bg --https=8430
    http://127.0.0.1:8430` line and Tailscale's `Available within your
    tailnet: https://<machine>.<tailnet>.ts.net:8430/`, `tailscale serve
-   publishes …`, then `warning: sandboxes can't reach the session listener:
-   allow it once with: sbx policy allow network localhost:8431` and `✓
+   publishes …`, then, only for a sandbox made from an older kit, `warning:
+   sandboxes can't reach the session listener: the network policy denies
+   localhost:8431; the kit allows it, so rebuild …`, and `✓
    sandboxes can't reach the phone listener`. Paste the output and the time.
    If Tailscale prints a link to enable Serve for the tailnet, open it,
    approve, and paste what happened. If the download of the source fails,
    paste the line (and `~/devenv/bin/devenv doctor | sed -n '/^secrets/,/^devenv checkout/p'`).
 
-4. **The policy rule**, once (it covers every sandbox and survives rebuilds),
-   then the full report:
+4. **The policy rule** comes from the kit (`localhost:8431`); a sandbox from an
+   older kit needs a rebuild (`sbx rm dev`, then run it again). Then the full
+   report:
    ```sh
-   sbx policy allow network localhost:8431
    ~/devenv/bin/devenv hub status
    ```
    Expected: every line `ok`: image, model, data folder (owner-only), running

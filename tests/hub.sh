@@ -70,6 +70,12 @@ fails=0
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
 
+# The kit grants sandboxes the default MAGIC_CONCH_SESSION_PORT port (permissions.network.allow).
+kit_allow=$(awk '/^permissions:/{f=1;next} f && /^[^ #]/{exit} f && /^ +- /{print $2}' "$ROOT/kits/devenv/spec.yaml")
+conf_port=$(sed -n 's/^MAGIC_CONCH_SESSION_PORT=\([0-9]*\).*/\1/p' "$ROOT/devenv.conf")
+printf '%s\n' "$kit_allow" | grep -qxF "localhost:$conf_port" && [ -n "$conf_port" ] \
+  && pass "the kit allows localhost:$conf_port, the default MAGIC_CONCH_SESSION_PORT" || fail "kit allow list '$kit_allow' lacks localhost:$conf_port (devenv.conf)"
+
 # Tailscale installed, running and signed in, with nothing served.
 signed_in() {
   echo "active enabled" > "$FAKE_LOG/tailscaled"
@@ -171,9 +177,9 @@ esac
 called "sudo tailscale serve --bg --https=$P http://127.0.0.1:$P" \
   && printf '%s' "$ERR" | grep -qF "tailscale serve publishes $URL to the phone listener" \
   && pass "tailscale serve publishes the phone listener over HTTPS on the tailnet" || fail "serve: $(grep serve "$FAKE_LOG/argv"), stderr: $ERR"
-printf '%s' "$ERR" | grep -qF "sandboxes can't reach the session listener: allow it once with: sbx policy allow network localhost:$S" \
+printf '%s' "$ERR" | grep -qF "sandboxes can't reach the session listener: the network policy denies localhost:$S; the kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$S)" \
   && printf '%s' "$ERR" | grep -qF "sandboxes can't reach the phone listener (localhost:$P is denied)" \
-  && pass "no policy rule yet: prints the exact sbx policy allow command, and the phone port stays denied" || fail "policy lines: $ERR"
+  && pass "policy denied: says the kit allows it, and the phone port stays denied" || fail "policy lines: $ERR"
 
 run FAKE_SBX_POLICY_ALLOW="localhost:$S" -- hub start
 [ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'the hub is already running' && ! called 'docker run -d' && ! called 'docker build' \
@@ -203,7 +209,7 @@ run FAKE_SBX_POLICY_ALLOW="localhost:$S" -- hub status
 hub
 run -- doctor --host
 section | grep -qF "ok    running (container devenv-magic-conch-hub, healthy)" \
-  && section | grep -qF "warn  sandboxes can't reach the session listener: allow it once with: sbx policy allow network localhost:$S" \
+  && section | grep -qF "warn  sandboxes can't reach the session listener: the network policy denies localhost:$S; the kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$S)" \
   && pass "doctor --host: a Magic Conch hub section" || fail "doctor's hub section: $(section)"
 chmod 755 "$DATA"
 run -- hub status
