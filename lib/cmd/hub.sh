@@ -360,7 +360,7 @@ hub_ensure_serve() {
 hub_policy_lines() {
   case "$(sbx_policy_state "$MAGIC_CONCH_SESSION_PORT")" in
     allowed) echo "ok: sandbox $CONF_SANDBOX_NAME may reach the session listener (the network policy allows localhost:$MAGIC_CONCH_SESSION_PORT)" ;;
-    denied) echo "warn: sandboxes can't reach the session listener: allow it once with: sbx policy allow network localhost:$MAGIC_CONCH_SESSION_PORT" ;;
+    denied) echo "warn: sandboxes can't reach the session listener: the network policy denies localhost:$MAGIC_CONCH_SESSION_PORT; the kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$MAGIC_CONCH_SESSION_PORT)" ;;
     *) have sbx && echo "info: check that sandboxes may reach it: sbx policy check network --sandbox $CONF_SANDBOX_NAME localhost:$MAGIC_CONCH_SESSION_PORT" ;;
   esac
   case "$(sbx_policy_state "$MAGIC_CONCH_PHONE_PORT")" in

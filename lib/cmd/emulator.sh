@@ -14,7 +14,7 @@
 # Host code: it reads nothing from the workspace dev/. The emulator runs in a
 # container with /dev/kvm; its adb port is published on the host's 127.0.0.1
 # only, and a sandbox reaches it at host.docker.internal once the host's
-# network policy allows localhost:<port>. Uses lib/android.sh.
+# network policy allows localhost:<port> (the kit's permissions.network.allow). Uses lib/android.sh.
 
 EMU_NAME=devenv-android-emulator      # the container, and the image repository
 EMU_SDK_VOLUME=devenv-android-sdk     # prefix of the SDK volumes' names
@@ -217,7 +217,7 @@ emu_host_report() {
   esac
   case "$(emu_policy_state)" in
     allowed) echo "ok: sandbox $CONF_SANDBOX_NAME may reach it (the network policy allows localhost:$ANDROID_EMULATOR_PORT)" ;;
-    denied) echo "warn: sandboxes can't reach it: allow it once with: sbx policy allow network localhost:$ANDROID_EMULATOR_PORT" ;;
+    denied) echo "warn: sandboxes can't reach it: the network policy denies localhost:$ANDROID_EMULATOR_PORT; the kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$ANDROID_EMULATOR_PORT)" ;;
     *) have sbx && echo "info: check that sandboxes may reach it: sbx policy check network --sandbox $CONF_SANDBOX_NAME localhost:$ANDROID_EMULATOR_PORT" ;;
   esac
   return 0
@@ -231,7 +231,7 @@ emu_unreachable_reason() {
   if [ "$(detect_mode)" = sbx ]; then
     out=$(curl -sS -m 5 -w '\n%{http_code}' "http://$host:$port/" 2>/dev/null </dev/null || true)
     if [ "$(printf '%s\n' "$out" | tail -n 1)" = 403 ] && printf '%s\n' "$out" | grep -qiE 'blocked|approval'; then
-      echo "the network policy doesn't let this sandbox reach localhost:$port (\"$(printf '%s\n' "$out" | head -n 1)\"); on the host, run once: sbx policy allow network localhost:$port"
+      echo "the network policy doesn't let this sandbox reach localhost:$port (\"$(printf '%s\n' "$out" | head -n 1)\"); the kit allows it, so rebuild a sandbox made from an older kit (on the host: sbx rm, then run it again), or, if you changed the port, run: sbx policy allow network localhost:$port"
       return 0
     fi
     echo "no emulator answers at $host:$port; on the host, run: devenv emulator start"
@@ -303,7 +303,7 @@ emu_start() {
   else warn "Android booted, but adb doesn't answer on 127.0.0.1:$ANDROID_EMULATOR_PORT (devenv emulator status)"; fi
   case "$(emu_policy_state)" in
     allowed) ok "sandbox $CONF_SANDBOX_NAME may reach it (the network policy allows localhost:$ANDROID_EMULATOR_PORT)" ;;
-    denied) warn "sandboxes can't reach it yet. Allow it once with: sbx policy allow network localhost:$ANDROID_EMULATOR_PORT" ;;
+    denied) warn "sandboxes can't reach it: the network policy denies localhost:$ANDROID_EMULATOR_PORT. The kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$ANDROID_EMULATOR_PORT)" ;;
     *) have sbx && log "check that sandboxes may reach it: sbx policy check network --sandbox $CONF_SANDBOX_NAME localhost:$ANDROID_EMULATOR_PORT" ;;
   esac
   log "in the sandbox: devenv emulator run -- ./gradlew connectedDebugAndroidTest (or devenv emulator connect)"

@@ -41,11 +41,16 @@ sandbox:
 
 # Network: the host keeps the `balanced` baseline policy. Extra domains go
 # here, scoped to this sandbox, only once V11 shows the baseline blocks them.
-# Never add herdr.dev.
-# permissions:
-#   network:
-#     allow:
-#       - example.com
+# Never add herdr.dev. The two localhost ports are the defaults of
+# ANDROID_EMULATOR_PORT (the host emulator's adb, D34) and
+# MAGIC_CONCH_SESSION_PORT (the hub's session listener, D36) in devenv.conf;
+# a host that changes either needs its own `sbx policy allow network`. Never
+# add the hub's phone port (8430).
+permissions:
+  network:
+    allow:
+      - localhost:15555
+      - localhost:8431
 
 setup:
   install:

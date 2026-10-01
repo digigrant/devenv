@@ -43,6 +43,12 @@ fails=0
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
 
+# The kit grants sandboxes the default ANDROID_EMULATOR_PORT port (permissions.network.allow).
+kit_allow=$(awk '/^permissions:/{f=1;next} f && /^[^ #]/{exit} f && /^ +- /{print $2}' "$ROOT/kits/devenv/spec.yaml")
+conf_port=$(sed -n 's/^ANDROID_EMULATOR_PORT=\([0-9]*\).*/\1/p' "$ROOT/devenv.conf")
+printf '%s\n' "$kit_allow" | grep -qxF "localhost:$conf_port" && [ -n "$conf_port" ] \
+  && pass "the kit allows localhost:$conf_port, the default ANDROID_EMULATOR_PORT" || fail "kit allow list '$kit_allow' lacks localhost:$conf_port (devenv.conf)"
+
 # run VAR=VALUE... -- ARGS: devenv on the host (no sandbox variables), with
 # the fakes first on PATH. Sets OUT, ERR, RC.
 run() {
@@ -103,9 +109,9 @@ line=$(grep '^docker run -d' "$FAKE_LOG/argv" || true)
 if printf '%s' "$line" | grep -qF -- "--name devenv-android-emulator --init --device $W/kvm:/dev/kvm -p 127.0.0.1:$PORT:6555 -v $vol:/android/sdk -e EMULATOR_MEMORY=4096 -e EMULATOR_CORES=4"; then
   pass "docker run: /dev/kvm, adb published on 127.0.0.1 only, the SDK volume, memory and cores"
 else fail "docker run: ${line:-none}"; fi
-printf '%s' "$ERR" | grep -qF "sandboxes can't reach it yet. Allow it once with: sbx policy allow network localhost:$PORT" \
+printf '%s' "$ERR" | grep -qF "sandboxes can't reach it: the network policy denies localhost:$PORT. The kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$PORT)" \
   && called "sbx policy check network --sandbox dev localhost:$PORT" \
-  && pass "no policy rule yet: prints the exact sbx policy allow command" || fail "policy hint missing: $ERR"
+  && pass "policy denied: says the kit allows it, rebuild an older sandbox, and the manual command for a changed port" || fail "policy hint missing: $ERR"
 
 run -- emulator start
 [ "$RC" = 0 ] && printf '%s' "$ERR" | grep -q 'already running' && ! called 'docker run -d' && ! called 'docker build' \
@@ -119,7 +125,7 @@ if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -qF "ok    running; Android booted
   pass "status: running, booted, adb answers, the policy allows it"
 else fail "status: exit $RC, output: $OUT"; fi
 run -- doctor --host
-printf '%s\n' "$OUT" | sed -n '/^Android emulator/,/^Operating rule/p' | grep -qF "warn  sandboxes can't reach it: allow it once with: sbx policy allow network localhost:$PORT" \
+printf '%s\n' "$OUT" | sed -n '/^Android emulator/,/^Operating rule/p' | grep -qF "warn  sandboxes can't reach it: the network policy denies localhost:$PORT; the kit allows it, so rebuild a sandbox made from an older kit (or, if you changed the port, run: sbx policy allow network localhost:$PORT)" \
   && pass "doctor --host: an Android emulator section with the policy fix" || fail "doctor's emulator section: $(printf '%s\n' "$OUT" | sed -n '/^Android emulator/,/^Operating rule/p')"
 adbd
 run -- emulator status
@@ -221,7 +227,7 @@ if [ -n "${SANDBOX_NAME:-}" ] && [ -n "${http_proxy:-}" ]; then
   # whether the network policy allows the port.
   run SANDBOX_NAME=dev IS_SANDBOX=1 WORKSPACE_DIR="$W/ws" PATH=/usr/local/bin:/usr/bin:/bin http_proxy="$http_proxy" ANDROID_EMULATOR_PORT=15555 -- emulator status
   line=$(printf '%s\n' "$OUT" | grep -E '^  (note|ok|warn) .*(emulator|15555)' || true)
-  printf '%s' "$line" | grep -qE "doesn't let this sandbox reach localhost:15555 .*; on the host, run once: sbx policy allow network localhost:15555|no emulator answers at host.docker.internal:15555; on the host, run: devenv emulator start|an emulator answers at host.docker.internal:15555" \
+  printf '%s' "$line" | grep -qE "doesn't let this sandbox reach localhost:15555 .*; the kit allows it, so rebuild a sandbox made from an older kit|no emulator answers at host.docker.internal:15555; on the host, run: devenv emulator start|an emulator answers at host.docker.internal:15555" \
     && pass "live, through this sandbox's proxy:${line#  note  emulator not reachable:}" || fail "live status: exit $RC, output: $OUT"
 fi
 
